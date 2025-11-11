@@ -6,8 +6,8 @@
   <title>Acceso Vehicular</title>
 
   <!-- Estilos -->
-  <link rel="stylesheet" href="style.css?v=58"/>
-  <link rel="stylesheet" href="webview.css?v=57"/>
+  <link rel="stylesheet" href="style.css?v=64"/>
+  <link rel="stylesheet" href="webview.css?v=64"/>
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.0/css/all.min.css">
 
@@ -16,14 +16,13 @@
   <meta name="mobile-web-app-capable" content="yes">
 </head>
 <body>
-  <div class="list-page-container">
-    <div class="list-page-header">
-      <a class="btn-back" href="menu.html"><i class="fa-solid fa-arrow-left"></i> Atrás</a>
-      <h1 class="page-title">Acceso Vehicular</h1>
-      <span></span>
-    </div>
+  <div class="form-page">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
+        <h2 style="margin:0;">Ingreso Vehicular</h2>
+        <a href="menu.html" class="btn-secondary" style="text-decoration:none;"><i class="fas fa-arrow-left"></i> Atrás</a>
+      </div>
 
-    <div class="form-container" style="max-width:640px; margin-inline:auto;">
       <form id="acceso-form" novalidate>
         <!-- Placa del Vehículo -->
         <div class="input-group">
@@ -72,17 +71,11 @@
           <label for="foto-input">Foto del Vehículo (Opcional)</label>
           <div style="display: flex; gap: 10px; margin-bottom: 10px;">
             <input type="file" id="foto-input" accept="image/*" style="flex: 1;" />
-            <button type="button" id="btn-camera" class="btn-icon" title="Abrir cámara">
+            <button type="button" id="btn-camera" class="btn-secondary" title="Abrir cámara">
               <i class="fa-solid fa-camera"></i>
             </button>
           </div>
           <img id="foto-preview" hidden style="max-width:100%; margin-top:10px; border-radius:8px;" />
-        </div>
-
-        <!-- Fecha y Hora (auto) -->
-        <div class="input-group" style="display: none;">
-          <label for="fecha-hora">Fecha y Hora Registro</label>
-          <input type="hidden" id="fecha-hora" />
         </div>
 
         <!-- Botones -->
@@ -98,22 +91,21 @@
     </div>
   </div>
 
-  <!-- Firebase (SIN defer y con versión 10.9.0 para que esté disponible antes que tu JS) -->
+  <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-storage-compat.js"></script>
 
-  <!-- Config: expone window.firebaseConfig -->
-  <script src="firebase-config.js?v=61"></script>
+  <!-- Config e Inicialización -->
+  <script src="firebase-config.js?v=64"></script>
+  <script src="initFirebase.js?v=64"></script>
+  <script src="offline-storage.js?v=64"></script>
+  <script src="ui.js?v=64"></script>
+  <script src="webview.js?v=64"></script>
 
-  <!-- Compresión de imágenes (esta SÍ define window.imageCompression) -->
-  <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
-
-  <!-- Libs y lógica -->
-  <script src="offline-storage.js?v=56" defer></script>
-  <script src="ui.js?v=57" defer></script>
-  <script src="accesovehicular.js?v=63" defer></script>
+  <!-- Lógica de Acceso Vehicular -->
+  <script src="accesovehicular.js?v=64"></script>
 
   <!-- SW -->
   <script>

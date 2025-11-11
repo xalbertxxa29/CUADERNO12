@@ -1,243 +1,240 @@
-// salidavehicular.js (v60)
-// Salida Vehicular - Listado de accesos en estado ingreso y registro de salida
-// Filtra por cliente y unidad del usuario logueado
+// salidavehicular.js (v64) - Salida Vehicular
+// Patrón idéntico a peatonal.js para consistencia
+document.addEventListener('DOMContentLoaded', () => {
+  // Firebase ya debe estar inicializado por initFirebase.js
+  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
 
-// Variables globales que se inicializarán en DOMContentLoaded
-let db, auth;
+  let currentUser = null;
+  let userData = null;
+  let vehiculosData = {}; // Almacenar datos para modal
 
-// ===================== INICIALIZAR FIREBASE =====================
-async function inicializarFirebase() {
-  return new Promise((resolve) => {
-    let checks = 0;
-    
-    const chequear = () => {
-      checks++;
-      
-      // Ver el estado actual
-      console.log(`[${checks}/100] Firebase: ${!!window.firebase}, Config: ${!!window.firebaseConfig}`);
-      
-      if (window.firebase && window.firebaseConfig) {
-        console.log('✅ Firebase y config detectados');
-        try {
-          if (!window.firebase.apps.length) {
-            window.firebase.initializeApp(window.firebaseConfig);
-          }
-          db = window.firebase.firestore();
-          auth = window.firebase.auth();
-          console.log('✅ Firebase inicializado correctamente');
-          resolve(true);
-        } catch (e) {
-          console.error('❌', e);
-          alert('Error: ' + e.message);
-          resolve(false);
-        }
-      } else if (checks < 100) {
-        setTimeout(chequear, 100);
-      } else {
-        console.error('❌ Firebase o config no disponibles después de 10 segundos');
-        alert('Error: Firebase no se cargó. Recarga la página.');
-        resolve(false);
-      }
-    };
-    
-    chequear();
-  });
-}
+  // Estado de sesión
+  let userCtx = { email: '', uid: '', cliente: '', unidad: '', puesto: '' };
 
-document.addEventListener('DOMContentLoaded', async () => {
-  // Inicializar Firebase
-  const firebaseOk = await inicializarFirebase();
-  if (!firebaseOk) {
-    console.error('No se pudo inicializar Firebase');
-    return;
-  }
-
-  const UX = {
-    show: (m) => (window.UI && UI.showOverlay) ? UI.showOverlay(m) : void 0,
-    hide: () => (window.UI && UI.hideOverlay) ? UI.hideOverlay() : void 0,
-    alert: (t, m, cb) => (window.UI && UI.alert) ? UI.alert(t, m, cb) : (alert(`${t}\n\n${m||''}`), cb && cb())
-  };
-
-  const vehiculosList = document.getElementById('vehiculos-list');
-  let userProfile = null;
-  let currentVehiculo = null;
-
-  // Cargar perfil del usuario
+  // Obtener usuario autenticado y sus datos
   auth.onAuthStateChanged(async (user) => {
-    if (!user) { window.location.href = 'index.html'; return; }
-    
+    if (!user) {
+      window.location.href = 'index.html';
+      return;
+    }
+
+    currentUser = user;
+    userCtx.email = user.email;
+    userCtx.uid = user.uid;
+
+    // Obtener datos del usuario desde offline storage primero
     try {
-      UX.show('Cargando datos...');
+      if (window.OfflineStorage) {
+        userData = await window.OfflineStorage.getUserData();
+        if (userData && userData.cliente && userData.unidad && userData.puesto) {
+          userCtx.cliente = userData.cliente;
+          userCtx.unidad = userData.unidad;
+          userCtx.puesto = userData.puesto;
+          console.log('✓ Datos del usuario obtenidos de OfflineStorage');
+          cargarVehiculos();
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('No se pudo cargar datos de OfflineStorage:', e.message);
+    }
+
+    // Si no están en offline storage, obtener de Firestore
+    try {
       const userId = user.email.split('@')[0];
       const snap = await db.collection('USUARIOS').doc(userId).get();
       
-      if (!snap.exists) throw new Error('Perfil no encontrado');
-      userProfile = snap.data();
-      
-      // Cargar vehículos con estado "ingreso"
-      await cargarVehiculos();
+      if (snap.exists) {
+        const datos = snap.data();
+        userCtx.cliente = datos.CLIENTE || datos.cliente || '';
+        userCtx.unidad = datos.UNIDAD || datos.unidad || '';
+        userCtx.puesto = datos.PUESTO || datos.puesto || '';
+        
+        console.log('✓ Datos del usuario obtenidos de Firestore', userCtx);
+        
+        // Guardar en offline storage para próxima vez
+        if (window.OfflineStorage && userCtx.cliente && userCtx.unidad) {
+          try {
+            await window.OfflineStorage.setUserData({
+              email: user.email,
+              userId: userId,
+              nombres: datos.NOMBRES || datos.nombres || '',
+              apellidos: datos.APELLIDOS || datos.apellidos || '',
+              cliente: userCtx.cliente,
+              unidad: userCtx.unidad,
+              puesto: userCtx.puesto
+            });
+          } catch (e) {
+            console.warn('No se pudo guardar en OfflineStorage:', e.message);
+          }
+        }
+        
+        cargarVehiculos();
+      } else {
+        console.warn('Perfil de usuario no encontrado en Firestore');
+        document.getElementById('vehiculos-list').innerHTML = '<p style="color:red;">Perfil de usuario no configurado</p>';
+      }
     } catch (e) {
-      console.error(e);
-      UX.alert('Error', 'No se pudo cargar tu perfil.');
-      window.location.href = 'menu.html';
-    } finally {
-      UX.hide();
+      console.error('Error obteniendo datos del usuario:', e);
+      document.getElementById('vehiculos-list').innerHTML = '<p style="color:red;">Error al cargar datos del usuario</p>';
     }
   });
 
-  // Cargar vehículos en estado "ingreso" para el cliente y unidad del usuario
+  // Cargar vehículos
   async function cargarVehiculos() {
-    try {
-      const { CLIENTE, UNIDAD } = userProfile;
-      
-      if (!CLIENTE || !UNIDAD) {
-        vehiculosList.innerHTML = `
-          <div class="empty-state">
-            <i class="fa-solid fa-triangle-exclamation"></i>
-            <p>No se encontraron datos de Cliente y Unidad</p>
-          </div>
-        `;
-        return;
-      }
+    console.log('🚗 Iniciando carga de vehículos con:', userCtx);
+    
+    if (!userCtx.cliente || !userCtx.unidad || !userCtx.puesto) {
+      const listDiv = document.getElementById('vehiculos-list');
+      const msg = `Faltan datos: cliente=${userCtx.cliente}, unidad=${userCtx.unidad}, puesto=${userCtx.puesto}`;
+      console.warn('⚠️', msg);
+      listDiv.innerHTML = `<p style="text-align:center; padding:20px; color:red;">${msg}</p>`;
+      return;
+    }
 
-      // Consultar registros con estado "ingreso"
+    const listDiv = document.getElementById('vehiculos-list');
+    listDiv.innerHTML = '<p style="text-align:center; padding:20px;">Cargando...</p>';
+
+    try {
       const query = db.collection('ACCESO_VEHICULAR')
-        .where('cliente', '==', CLIENTE)
-        .where('unidad', '==', UNIDAD)
-        .where('estado', '==', 'ingreso')
-        .orderBy('fechaHoraIngreso', 'desc');
-      
+        .where('cliente', '==', userCtx.cliente)
+        .where('unidad', '==', userCtx.unidad)
+        .where('puesto', '==', userCtx.puesto)
+        .where('estado', '==', 'ingreso');
+
+      console.log('📋 Ejecutando query con filtros:', {
+        cliente: userCtx.cliente,
+        unidad: userCtx.unidad,
+        puesto: userCtx.puesto,
+        estado: 'ingreso'
+      });
+
       const snapshot = await query.get();
 
+      console.log('📊 Query result:', snapshot.size, 'documentos encontrados');
+
       if (snapshot.empty) {
-        vehiculosList.innerHTML = `
-          <div class="empty-state">
-            <i class="fa-solid fa-circle-check"></i>
-            <p>No hay vehículos en acceso actualmente</p>
-          </div>
-        `;
+        listDiv.innerHTML = '<p style="text-align:center; padding:20px; color:#999;">No hay vehículos registrados para salida</p>';
         return;
       }
 
-      // Mostrar vehículos
-      vehiculosList.innerHTML = '';
+      listDiv.innerHTML = '';
       snapshot.forEach(doc => {
         const data = doc.data();
-        const card = crearCardVehiculo(doc.id, data);
-        vehiculosList.appendChild(card);
+        vehiculosData[doc.id] = { docId: doc.id, ...data };
+
+        const card = document.createElement('div');
+        card.className = 'vehiculo-card';
+        card.innerHTML = `
+          <div class="vehiculo-info">
+            <div style="margin-bottom:10px;">
+              <strong>Placa:</strong> ${data.placa || 'N/A'}
+            </div>
+            <div style="margin-bottom:10px;">
+              <strong>Marca:</strong> ${data.marca || 'N/A'} - <strong>Modelo:</strong> ${data.modelo || 'N/A'}
+            </div>
+            <div style="margin-bottom:10px;">
+              <strong>Color:</strong> ${data.color || 'N/A'}
+            </div>
+            <div style="margin-bottom:10px;">
+              <strong>DNI:</strong> ${data.dni || 'N/A'} - <strong>Nombre:</strong> ${data.nombres || 'N/A'}
+            </div>
+            ${data.observaciones ? `<div style="margin-bottom:10px;"><strong>Observaciones:</strong> ${data.observaciones}</div>` : ''}
+            <div style="margin-bottom:10px; font-size:0.9em; color:#999;">
+              Ingreso: ${new Date(data.fechaIngreso).toLocaleString('es-ES')}
+            </div>
+          </div>
+          <button class="btn-dar-salida" data-doc-id="${doc.id}">
+            Dar Salida
+          </button>
+        `;
+        listDiv.appendChild(card);
       });
-    } catch (e) {
-      console.error(e);
-      vehiculosList.innerHTML = `
-        <div class="empty-state">
-          <i class="fa-solid fa-exclamation-circle"></i>
-          <p>Error al cargar vehículos: ${e.message}</p>
-        </div>
-      `;
+
+      console.log('✓ Se cargaron', snapshot.size, 'vehículos');
+
+      // Agregar event listeners a botones
+      document.querySelectorAll('.btn-dar-salida').forEach(btn => {
+        btn.addEventListener('click', abrirModalSalida);
+      });
+
+    } catch (error) {
+      console.error('❌ Error cargando vehículos:', error);
+      listDiv.innerHTML = `<p style="text-align:center; color:red; padding:20px;">Error: ${error.message}</p>`;
     }
   }
 
-  // Crear tarjeta de vehículo
-  function crearCardVehiculo(docId, data) {
-    const card = document.createElement('div');
-    card.className = 'vehiculo-card';
+  // Modal Salida
+  function abrirModalSalida(e) {
+    const docId = e.target.dataset.docId;
+    const vehiculo = vehiculosData[docId];
+
+    if (!vehiculo) return;
+
+    // Mostrar datos en el modal
+    document.getElementById('modal-placa').textContent = vehiculo.placa || 'N/A';
+    document.getElementById('modal-marca-modelo').textContent = `${vehiculo.marca || 'N/A'} ${vehiculo.modelo || 'N/A'}`;
+    document.getElementById('modal-dni-nombre').textContent = `${vehiculo.dni || 'N/A'} - ${vehiculo.nombres || 'N/A'}`;
     
-    // Formatear fecha
-    const fechaIngreso = new Date(data.fechaHoraIngreso).toLocaleString('es-ES');
+    document.getElementById('comentario-salida').value = '';
     
-    card.innerHTML = `
-      <h3><i class="fa-solid fa-car"></i> ${data.placa}</h3>
-      <div class="vehiculo-info">
-        <p><strong>Marca:</strong> ${data.marca}</p>
-        <p><strong>Modelo:</strong> ${data.modelo}</p>
-        <p><strong>Propietario:</strong> ${data.nombresPropietario}</p>
-        <p><strong>DNI:</strong> ${data.dni}</p>
-        <p><strong>Ingreso:</strong> ${fechaIngreso}</p>
-        ${data.observacionesIngreso ? `<p><strong>Observaciones:</strong> ${data.observacionesIngreso}</p>` : ''}
-      </div>
-      <button class="btn-salida" onclick="abrirModalSalida('${docId}')">
-        <i class="fa-solid fa-arrow-right-from-bracket"></i> Registrar Salida
-      </button>
-    `;
-    
-    return card;
+    // Mostrar modal
+    const modal = document.getElementById('modal-salida');
+    modal.style.display = 'flex';
+
+    // Botón Cancelar
+    document.getElementById('btn-cancelar-salida').onclick = () => {
+      modal.style.display = 'none';
+    };
+
+    // Botón Dar Salida
+    document.getElementById('btn-confirmar-salida').onclick = async () => {
+      await guardarSalida(docId);
+      modal.style.display = 'none';
+      cargarVehiculos(); // Recargar lista
+    };
   }
 
-  // Variables globales para el modal
-  window.abrirModalSalida = async function(docId) {
-    try {
-      UX.show('Cargando...');
-      const doc = await db.collection('ACCESO_VEHICULAR').doc(docId).get();
-      
-      if (!doc.exists) throw new Error('Registro no encontrado');
-      
-      currentVehiculo = { docId, data: doc.data() };
-      
-      // Llenar modal con información
-      const infoDiv = document.getElementById('modal-info-vehiculo');
-      const fechaIngreso = new Date(currentVehiculo.data.fechaHoraIngreso).toLocaleString('es-ES');
-      
-      infoDiv.innerHTML = `
-        <p><strong>Placa:</strong> ${currentVehiculo.data.placa}</p>
-        <p><strong>Marca:</strong> ${currentVehiculo.data.marca} - ${currentVehiculo.data.modelo}</p>
-        <p><strong>Propietario:</strong> ${currentVehiculo.data.nombresPropietario} (DNI: ${currentVehiculo.data.dni})</p>
-        <p><strong>Ingreso:</strong> ${fechaIngreso}</p>
-      `;
-      
-      // Limpiar campo de observaciones
-      document.getElementById('observaciones-salida').value = '';
-      
-      // Mostrar modal
-      document.getElementById('modal-salida').classList.add('active');
-      UX.hide();
-    } catch (e) {
-      console.error(e);
-      UX.hide();
-      UX.alert('Error', 'No se pudo cargar el registro del vehículo.');
-    }
-  };
-
-  window.cerrarModalSalida = function() {
-    document.getElementById('modal-salida').classList.remove('active');
-    currentVehiculo = null;
-  };
-
-  window.confirmarSalida = async function() {
-    if (!currentVehiculo) return;
-
-    const observacionesSalida = (document.getElementById('observaciones-salida')?.value || '').trim();
+  // Guardar salida
+  async function guardarSalida(docId) {
+    const comentario = document.getElementById('comentario-salida').value.trim();
     
-    UX.show('Registrando salida...');
+    const ahora = new Date();
+    const fechaSalida = ahora.toISOString();
+
+    if (UI?.showOverlay) UI.showOverlay('Registrando salida...');
+
     try {
-      const now = new Date();
-      const fechaHoraSalida = now.toISOString();
-      
-      // Actualizar documento con estado "salida"
-      await db.collection('ACCESO_VEHICULAR').doc(currentVehiculo.docId).update({
+      await db.collection('ACCESO_VEHICULAR').doc(docId).update({
         estado: 'salida',
-        fechaHoraSalida: fechaHoraSalida,
-        observacionesSalida: observacionesSalida,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        fechaSalida: fechaSalida,
+        comentarioSalida: comentario,
+        usuarioSalida: currentUser.email,
+        usuarioSalidaUid: currentUser.uid
       });
 
-      UX.hide();
-      cerrarModalSalida();
-      
-      UX.alert('Éxito', 'Salida registrada correctamente.', async () => {
-        // Recargar lista de vehículos
-        await cargarVehiculos();
-      });
-    } catch (err) {
-      console.error(err);
-      UX.hide();
-      UX.alert('Error', 'No se pudo registrar la salida: ' + err.message);
-    }
-  };
+      if (UI?.hideOverlay) UI.hideOverlay();
 
-  // Cerrar modal al hacer click fuera del contenido
-  document.getElementById('modal-salida')?.addEventListener('click', (e) => {
-    if (e.target.id === 'modal-salida') {
-      cerrarModalSalida();
+      if (UI?.alert) {
+        UI.alert('Éxito', 'Salida registrada correctamente.');
+      } else {
+        alert('Salida registrada correctamente');
+      }
+    } catch (error) {
+      if (UI?.hideOverlay) UI.hideOverlay();
+      console.error('Error guardando salida:', error);
+      if (UI?.alert) {
+        UI.alert('Error', 'No fue posible registrar la salida: ' + error.message);
+      } else {
+        alert('Error: ' + error.message);
+      }
     }
+  }
+
+  // Botón Atrás
+  document.getElementById('btn-atras')?.addEventListener('click', () => {
+    window.history.back();
   });
 });

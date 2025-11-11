@@ -8,7 +8,7 @@
    - skipWaiting + clients.claim + autorefresh suave.
 */
 
-const SW_VERSION = 'v62';
+const SW_VERSION = 'v64';
 const PRECACHE   = `precache-${SW_VERSION}`;
 const RUNTIME    = `runtime-${SW_VERSION}`;
 
