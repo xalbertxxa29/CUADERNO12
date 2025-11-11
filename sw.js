@@ -1,4 +1,4 @@
-/* sw.js (v62)
+/* sw.js (v65)
    Estrategias:
    - HTML (navigate): network-first con timeout + navigationPreload + fallback a caché (ignoreSearch).
    - JS/CSS/Workers: stale-while-revalidate.
@@ -8,7 +8,7 @@
    - skipWaiting + clients.claim + autorefresh suave.
 */
 
-const SW_VERSION = 'v64';
+const SW_VERSION = 'v65';
 const PRECACHE   = `precache-${SW_VERSION}`;
 const RUNTIME    = `runtime-${SW_VERSION}`;
 

@@ -1,1117 +1,761 @@
-// ====== MAPA DE REFERENCIAS (QR → Punto de Marcación) ======
-const REFERENCIA_MAP = {
-  "1761055082506": "1",
-  "1761055097257": "2",
-  "1761055105341": "3",
-  "1761055598535": "4",
-  "1761055619574": "5",
-  "1761055731912": "6",
-  "1761055748808": "7",
-  "1761055758075": "8",
-  "1761055765742": "9",
-  "1761056924033": "10",
-  "1761056935227": "11",
-  "1761056952702": "12",
-  "1761056960727": "13",
-  "1761056968594": "14",
-  "1761056974553": "15",
-  "1761058333445": "16",
-  "1761058340305": "17",
-  "1761058346339": "18",
-  "1761058353137": "19",
-  "1761058359372": "20",
-  "1761058367017": "21",
-  "1761058388859": "22",
-  "1761058395655": "23",
-  "1761058402461": "24",
-  "1761058423101": "25",
-  "1761058429185": "27",
-  "1761058447734": "28",
-  "1761058454312": "29",
-  "1761058460400": "30",
-  "1760037324942": "MARCACION QR"
-};
-
-// ============================
-//  Firebase (compat) — inicialización segura
-// ============================
-const fb = window.firebase || self.firebase;
-if (fb && !fb.apps.length) {
-  if (!firebaseConfig || !firebaseConfig.projectId) {
-    console.error('Falta firebaseConfig o projectId');
-    alert('No se encontró la configuración de Firebase. Verifica que "firebase-config.js" cargue antes que "ronda.js".');
-    throw new Error('Firebase config ausente');
-  }
-  fb.initializeApp(firebaseConfig);
-  console.log('Firebase listo →', fb.app().options.projectId);
-}
-const db = fb?.firestore?.();
-const storage = fb?.storage?.();
-const auth = fb?.auth?.();
-
-// Habilita persistencia ANTES de cualquier operación (si el WebView lo permite)
-// Solo intenta habilitar si no está ya habilitada
-let persistenceEnabled = false;
-if (db?.enablePersistence) {
-  db.enablePersistence({ synchronizeTabs: false }).catch(err => {
-    if (err.code === 'failed-precondition') {
-      console.warn('Múltiples tabs/WebViews abiertos - persistencia deshabilitada');
-    } else if (err.code === 'unimplemented') {
-      console.warn('Persistencia no soportada en este navegador');
-    } else {
-      console.warn('Error de persistencia:', err.message);
-    }
-  });
-  persistenceEnabled = true;
-}
-
-// Variable para almacenar el usuario logueado
-let usuarioLogueado = null;
-
-// ===== Colección destino en Firestore =====
-const FIRE_COLLECTION = 'RONDAS';
-
-// ===== Sistema de sincronización de fotos offline =====
-let photoQueue = null;
-if (db && storage && typeof OfflinePhotoQueue !== 'undefined') {
-  photoQueue = new OfflinePhotoQueue(db, storage);
-  console.log('✅ Sistema de sincronización offline activado');
-}
-
-// =============================
-// ELEMENTOS DE UI
-// =============================
-const scannerContainer = document.getElementById('scanner-container');
-const optionsContainer = document.getElementById('options-container');
-const formSinNovedadContainer = document.getElementById('form-sin-novedad-container');
-const formConNovedadContainer = document.getElementById('form-con-novedad-container');
-
-const video = document.getElementById('video');
-const canvasElement = document.getElementById('canvas');
-const canvas = canvasElement.getContext('2d', { willReadFrequently: true });
-
-const scannedPointName = document.getElementById('scanned-point-name');
-const btnSinNovedad = document.getElementById('btn-sin-novedad');
-const btnConNovedad = document.getElementById('btn-con-novedad');
-const btnCancelScan = document.getElementById('btn-cancel-scan');
-
-const formSinNovedad = document.getElementById('form-sin-novedad');
-const formConNovedad = document.getElementById('form-con-novedad');
-
-const statusToast = document.getElementById('status-toast');
-const pointNameSin = document.getElementById('point-name-sin-novedad');
-const pointNameCon = document.getElementById('point-name-con-novedad');
-
-const savingOverlay = document.getElementById('saving-overlay');
-const savingMsg = document.getElementById('saving-msg');
-
-// Evidencia
-const evidencePreview = document.getElementById('evidence-preview');
-const evidenceWrap = document.getElementById('evidence-preview-wrap');
-const evidenceBtn = document.getElementById('btn-evidencia');
-const evidenceRemove = document.getElementById('evidence-remove');
-
-// === Elementos de cámara para evidencia ===
-const cameraModalEvidencia = document.getElementById('camera-modal-evidencia');
-const videoEvidencia = document.getElementById('video-evidencia');
-const canvasEvidencia = document.getElementById('canvas-evidencia');
-const btnCapturePhoto = document.getElementById('btn-capture-photo');
-const btnCancelCamera = document.getElementById('btn-cancel-camera');
-let streamEvidencia = null;
-
-// === Sheet evidencia (Cámara / Galería) ===
-const sheetEvid = document.getElementById('sheet-evidencia');
-const optCam = document.getElementById('opt-cam');
-const optGal = document.getElementById('opt-gal');
-const optCancelar = document.getElementById('opt-cancelar');
-const evidenceInputGallery = document.getElementById('evidence-input-gallery');
-
-function openSheet()  { sheetEvid?.classList.remove('hidden'); }
-function closeSheet() { sheetEvid?.classList.add('hidden'); }
-optCancelar?.addEventListener('click', closeSheet);
-sheetEvid?.addEventListener('click', (e)=>{ if(e.target === sheetEvid) closeSheet(); });
-evidenceBtn?.addEventListener('click', (e)=>{ e.preventDefault(); openSheet(); });
-
-// Al hacer clic en "Abrir cámara": abrir modal de cámara
-optCam?.addEventListener('click', () => {
-  closeSheet();
-  openCameraModal();
-});
-
-// Al hacer clic en "Adjuntar desde galería": abrir selector de archivos
-optGal?.addEventListener('click', () => {
-  closeSheet();
-  evidenceInputGallery?.click();
-});
-
-// =============================
-// CÁMARA PARA EVIDENCIA
-// =============================
-async function openCameraModal() {
-  cameraModalEvidencia.style.display = 'flex';
-  try {
-    streamEvidencia = await navigator.mediaDevices.getUserMedia({ 
-      video: { facingMode: 'environment' } 
-    });
-    videoEvidencia.srcObject = streamEvidencia;
-    await videoEvidencia.play();
-  } catch (err) {
-    console.error('Error de cámara:', err);
-    showToast('No se pudo acceder a la cámara.', 'error');
-    closeCameraModal();
-  }
-}
-
-function closeCameraModal() {
-  cameraModalEvidencia.style.display = 'none';
-  if (streamEvidencia) {
-    streamEvidencia.getTracks().forEach(t => t.stop());
-    streamEvidencia = null;
-  }
-  videoEvidencia.srcObject = null;
-}
-
-function capturePhotoFromVideo() {
-  const ctx = canvasEvidencia.getContext('2d', { willReadFrequently: true });
-  canvasEvidencia.width = videoEvidencia.videoWidth;
-  canvasEvidencia.height = videoEvidencia.videoHeight;
-  ctx.drawImage(videoEvidencia, 0, 0);
-  return canvasEvidencia.toDataURL('image/jpeg', 0.82);
-}
-
-// Botones del modal de cámara
-btnCapturePhoto?.addEventListener('click', async () => {
-  try {
-    const photoDataUrl = capturePhotoFromVideo();
-    closeCameraModal();
-    // Convertir a blob y procesar como archivo
-    const blob = dataURLtoBlob(photoDataUrl);
-    await processEvidenceFile(blob);
-  } catch (err) {
-    console.error('Error capturando foto:', err);
-    showToast('No se pudo capturar la foto.', 'error');
-  }
-});
-
-btnCancelCamera?.addEventListener('click', closeCameraModal);
-
-// === Pregunta 6 ===
-const q6Radios = document.querySelectorAll('input[name="q6"]');
-const q6Comment = document.getElementById('q6-comment');
-
-// Modal de permisos de cámara
-const cameraMsg = document.getElementById('camera-permission-msg');
-const startScanCta = document.getElementById('start-scan-cta');
-const btnCancelRondas = document.getElementById('btn-cancel-rondas');
-
-// =============================
-// ESTADO
-// =============================
-let stream = null;
-let currentScannedData = null;
-let evidenceDataUrl = '';
-let userInteracted = false;
-window.addEventListener('pointerdown', () => (userInteracted = true), { once: true });
-
-// Cronómetro
-let timerInterval = null;
-let timerStartTime = null;
-let timerElapsedSeconds = 0;
-
-// =============================
-// SERVICE WORKER (idempotente)
-// =============================
-if ('serviceWorker' in navigator) {
-  // Si ya está registrado, esto no rompe nada.
-  navigator.serviceWorker.register('sw.js').catch(console.error);
-}
-
-// =============================
-// INICIALIZAR IndexedDB PARA REGISTROS OFFLINE
-// =============================
-function initOfflineDB() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('ronda-offline-db', 1);
-    
-    request.onerror = () => {
-      console.error('Error abriendo IndexedDB');
-      reject(request.error);
-    };
-    
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains('pending-records')) {
-        db.createObjectStore('pending-records', { keyPath: 'docId' });
-        console.log('✓ Object store "pending-records" creado');
-      }
-    };
-    
-    request.onsuccess = () => {
-      console.log('✓ IndexedDB inicializado para registros offline');
-      resolve(request.result);
-    };
-  });
-}
-
-// Inicializar al cargar la página
-initOfflineDB().catch(e => console.warn('No se pudo inicializar IndexedDB:', e));
-
-// =============================
-// OVERLAY DE GUARDADO
-// =============================
-function showSaving(msg = 'Guardando…') {
-  savingOverlay?.classList.add('active');
-  if (savingMsg) savingMsg.textContent = msg;
-}
-function showSaved(msg = 'Guardado') {
-  savingOverlay?.classList.add('success');
-  if (savingMsg) savingMsg.textContent = msg;
-  setTimeout(hideSaving, 900);
-}
-function hideSaving() {
-  savingOverlay?.classList.remove('active', 'success');
-}
-
-// =============================
-// ESCÁNER QR
-// =============================
-function startScanner() {
-  currentScannedData = null;
-  cameraMsg?.classList.remove('active');
-
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-    .then(s => {
-      stream = s;
-      video.srcObject = stream;
-      return video.play();
-    })
-    .then(() => requestAnimationFrame(tick))
-    .catch(err => {
-      console.error('Error de cámara:', err.name, err.message);
-      cameraMsg?.classList.add('active');
-      if (startScanCta) { startScanCta.disabled = false; startScanCta.style.opacity = '1'; }
-    });
-}
-
-function stopScanner() {
-  if (stream) {
-    stream.getTracks().forEach(t => t.stop());
-    stream = null;
-  }
-}
-
-function drawPath(loc) {
-  const p = [loc.topLeftCorner, loc.topRightCorner, loc.bottomRightCorner, loc.bottomLeftCorner];
-  canvas.beginPath();
-  canvas.moveTo(p[0].x, p[0].y);
-  for (let i = 1; i < p.length; i++) canvas.lineTo(p[i].x, p[i].y);
-  canvas.closePath();
-  canvas.lineWidth = 4;
-  canvas.strokeStyle = 'rgba(0,200,0,0.9)';
-  canvas.stroke();
-}
-
-function tick() {
-  if (video.readyState === video.HAVE_ENOUGH_DATA) {
-    canvasElement.height = video.videoHeight || 480;
-    canvasElement.width  = video.videoWidth  || 640;
-    canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
-
-    const imgData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
-    const code = (typeof jsQR === 'function') ? jsQR(imgData.data, imgData.width, imgData.height) : null;
-
-    if (code && code.data) {
-      if (code.location) drawPath(code.location);
-      const normalized = String(code.data).trim().replace(/\s+/g, '');
-      const punto = REFERENCIA_MAP[normalized];
-
-      if (punto) {
-        stopScanner();
-        currentScannedData = { referencia: normalized, puntoMarcacion: punto };
-        if (scannedPointName) scannedPointName.textContent = punto;
-        scannerContainer.style.display = 'none';
-        optionsContainer.style.display = 'flex';
-        resetTimer();  // Reinicia el cronómetro
-        startTimer();  // Inicia el cronómetro cuando se detecta QR válido
-        if (userInteracted && navigator.vibrate) { try { navigator.vibrate(150); } catch {} }
-        return;
-      } else {
-        showToast(`QR no reconocido: ${normalized}`, 'error');
-      }
-    }
-  }
-  requestAnimationFrame(tick);
-}
-
-// =============================
-// CRONÓMETRO
-// =============================
-function formatTime(seconds) {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-}
-
-function startTimer() {
-  if (timerInterval) clearInterval(timerInterval);
-  timerStartTime = Date.now();
-  timerElapsedSeconds = 0;
-  
-  timerInterval = setInterval(() => {
-    timerElapsedSeconds = Math.floor((Date.now() - timerStartTime) / 1000);
-    const timeStr = formatTime(timerElapsedSeconds);
-    
-    // Obtener referencias dinámicamente por si el DOM cambió
-    const timerSinNovedad = document.getElementById('timer-sin-novedad');
-    const timerConNovedad = document.getElementById('timer-con-novedad');
-    
-    // Actualizar ambos displays
-    if (timerSinNovedad) timerSinNovedad.textContent = timeStr;
-    if (timerConNovedad) timerConNovedad.textContent = timeStr;
-  }, 100);
-}
-
-function stopTimer() {
-  if (timerInterval) {
-    clearInterval(timerInterval);
-    timerInterval = null;
-  }
-}
-
-function resetTimer() {
-  stopTimer();
-  timerElapsedSeconds = 0;
-  timerStartTime = null;
-  const timerSinNovedad = document.getElementById('timer-sin-novedad');
-  const timerConNovedad = document.getElementById('timer-con-novedad');
-  if (timerSinNovedad) timerSinNovedad.textContent = '00:00';
-  if (timerConNovedad) timerConNovedad.textContent = '00:00';
-}
-
-// =============================
-// UI STATES
-// =============================
-function showUI(state) {
-  [scannerContainer, optionsContainer, formSinNovedadContainer, formConNovedadContainer]
-    .forEach(el => (el.style.display = 'none'));
-
-  const point = currentScannedData?.puntoMarcacion || '';
-  if (pointNameSin) pointNameSin.textContent = point;
-  if (pointNameCon) pointNameCon.textContent = point;
-
-  if (state === 'scanner') {
-    scannerContainer.style.display = 'block';
-  } else if (state === 'options') {
-    optionsContainer.style.display = 'flex';
-  } else if (state === 'sin-novedad') {
-    formSinNovedadContainer.style.display = 'block';
-  } else if (state === 'con-novedad') {
-    formConNovedadContainer.style.display = 'block';
-  }
-}
-
-// =============================
-// BOTONES PRINCIPALES
-// =============================
-btnCancelScan?.addEventListener('click', () => {
-  stopScanner();
-  resetEvidence(); resetQuestions();
-  showUI('scanner');
-  cameraMsg?.classList.add('active'); // volver a PLAY
-});
-btnSinNovedad?.addEventListener('click', () => showUI('sin-novedad'));
-btnConNovedad?.addEventListener('click', () => showUI('con-novedad'));
-document.querySelectorAll('.form-cancel').forEach(b => b.addEventListener('click', () => {
-  resetEvidence(); resetQuestions(); showUI('options');
-}));
-startScanCta?.addEventListener('click', () => {
-  startScanCta.disabled = true; startScanCta.style.opacity = '.7';
-  showUI('scanner'); startScanner();
-});
-
-// Botón Cancelar - volver a menú
-if (btnCancelRondas) {
-  btnCancelRondas.addEventListener('click', (e) => {
-    console.log('Botón cancelar clickeado');
-    e.preventDefault();
-    window.location.href = 'menu.html';
-  });
-  console.log('Listener del botón cancelar agregado');
-} else {
-  console.warn('No se encontró el botón btnCancelRondas');
-}
-
-// =============================
-// EVIDENCIA (imagen)
-// =============================
-function fileToOptimizedDataURL(file, max = 1280, q = 0.82) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        let { width, height } = img;
-        if (width > height && width > max) { height *= max / width; width = max; }
-        else if (height > width && height > max) { width *= max / height; height = max; }
-        const c = document.createElement('canvas');
-        c.width = width; c.height = height;
-        c.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0, width, height);
-        resolve(c.toDataURL('image/jpeg', q));
-      };
-      img.onerror = reject; img.src = r.result;
-    };
-    r.onerror = reject; r.readAsDataURL(file);
-  });
-}
-
-function dataURLtoBlob(dataURL) {
-  const [head, body] = dataURL.split(',');
-  const mime = head.match(/:(.*?);/)?.[1] || 'image/jpeg';
-  const bin = atob(body); const len = bin.length; const arr = new Uint8Array(len);
-  for (let i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
-  return new Blob([arr], { type: mime });
-}
-
-function resetEvidence() {
-  evidenceDataUrl = '';
-  if (evidenceInputGallery) evidenceInputGallery.value = '';
-  if (streamEvidencia) closeCameraModal();
-  evidenceWrap.style.display = 'none';
-  evidencePreview.src = '';
-}
-
-// único pipeline para ambos inputs
-async function processEvidenceFile(file){
-  if(!file) return;
-  showSaving('Procesando evidencia…');
-  try{
-    evidenceDataUrl = await fileToOptimizedDataURL(file);
-    evidencePreview.src = evidenceDataUrl;
-    evidenceWrap.style.display = 'flex';
-    hideSaving(); showToast('Evidencia lista.', 'success');
-  }catch(err){
-    console.error(err); hideSaving();
-    resetEvidence();
-    showToast('No se pudo procesar la evidencia.', 'error');
-  }
-}
-
-// listeners (solo una vez; sin duplicados)
-evidenceInputGallery?.addEventListener('change', async e => {
-  const file = e.target.files?.[0];
-  await processEvidenceFile(file);
-});
-evidenceRemove?.addEventListener('click', resetEvidence);
-
-// =============================
-// PREGUNTAS
-// =============================
-function resetQuestions() {
-  ['q1','q2','q3','q4','q5','q6'].forEach(n =>
-    document.querySelectorAll(`input[name="${n}"]`).forEach(r => (r.checked = false))
-  );
-  if (q6Comment) {
-    q6Comment.value = '';
-    q6Comment.closest('.q6-comment-wrap')?.classList.add('hidden');
-  }
-}
-q6Radios.forEach(r => r.addEventListener('change', () => {
-  const wrap = q6Comment?.closest('.q6-comment-wrap');
-  const isYes = document.querySelector('input[name="q6"][value="SI"]')?.checked;
-  if (isYes) { wrap?.classList.remove('hidden'); if (q6Comment) q6Comment.required = true; }
-  else { wrap?.classList.add('hidden'); if (q6Comment) { q6Comment.required = false; q6Comment.value = ''; } }
-}));
-
-// =============================
-// FUNCIONES AUXILIARES
-// =============================
-const isOnline = () => navigator.onLine;
-
-// =============================
-// ENVÍO → FIREBASE (OFFLINE-FIRST)
-// =============================
-function makeDocId(payload){
-  const rnd = Math.random().toString(36).slice(2,8);
-  return `${payload.referenciaQR}_${Date.now()}_${rnd}`;
-}
-
-async function uploadAndPatch(docId, path, blob){
-  try {
-    console.log('Iniciando subida de foto...');
-    console.log('  docId:', docId);
-    console.log('  path:', path);
-    console.log('  blob size:', blob.size, 'bytes');
-    console.log('  blob type:', blob.type);
-    
-    // Si hay sistema de cola offline y NO hay conexión, agregar a cola
-    if (photoQueue && !navigator.onLine) {
-      console.log('🔌 Sin conexión - Foto agregada a cola offline');
-      await photoQueue.addPhoto({
-        docId: docId,
-        path: path,
-        collectionName: FIRE_COLLECTION,
-        urlField: 'evidenciaUrl'
-      }, blob);
-      return; // Completar sin error, la foto se sincronizará después
-    }
-    
-    // Si hay conexión, subir directamente
-    const ref = storage.ref().child(path);
-    console.log('  ref creado:', ref.fullPath);
-    
-    console.log('Subiendo blob a Storage...');
-    await ref.put(blob, { contentType: blob.type });
-    console.log('✓ Blob subido exitosamente');
-    
-    console.log('Obteniendo URL de descarga...');
-    const url = await ref.getDownloadURL();
-    console.log('✓ URL obtenida:', url);
-    
-    console.log('Actualizando documento en Firestore...');
-    await db.collection(FIRE_COLLECTION).doc(docId).update({
-      evidenciaUrl: url,
-      pendingUpload: false,
-      reconnectedAt: new Date().toISOString()
-    });
-    console.log('✓ Documento actualizado');
-  } catch (e) {
-    console.error('❌ Error al subir foto:');
-    console.error('  Code:', e?.code);
-    console.error('  Message:', e?.message);
-    console.error('  Error completo:', e);
-    throw e;
-  }
-}
-
-async function queueUpload(docId, path, blob){
-  // Simplificado: solo subo si hay conexión. Si no, guardo sin foto.
-  showToast('Foto no se pudo subir sin conexión. Registro guardado sin evidencia.', 'offline');
-}
-
-// Disparadores de sincronización y indicadores UI
-const offlineIndicator = document.getElementById('offline-indicator');
-const syncIndicator = document.getElementById('sync-indicator');
-
-// Verificación periódica de conexión (para WebView que no dispara evento 'online')
-let lastOnlineState = navigator.onLine;
-setInterval(() => {
-  const currentOnlineState = navigator.onLine;
-  
-  // Detectar cambio de offline a online
-  if (!lastOnlineState && currentOnlineState) {
-    console.log('🌐 Cambio detectado: Pasó de OFFLINE a ONLINE');
-    lastOnlineState = true;
-    
-    // Disparar sincronización
-    if (offlineIndicator) offlineIndicator.style.display = 'none';
-    if (syncIndicator) syncIndicator.style.display = 'block';
-    showToast('Conexión recuperada. Sincronizando...', 'success');
-    
-    (async () => {
-      try {
-        console.log('Paso 1: Sincronizando registros offline...');
-        await syncOfflineRecords();
-        console.log('Paso 1 completado');
-        
-        if (photoQueue) {
-          console.log('Paso 2: Sincronizando fotos...');
-          await photoQueue.syncQueue();
-          console.log('Paso 2 completado');
-        }
-        
-        if (syncIndicator) syncIndicator.style.display = 'none';
-        showToast('✅ Sincronización completada.', 'success');
-        console.log('✅ Toda la sincronización completada');
-      } catch (e) {
-        console.error('Error durante sincronización:', e);
-        if (syncIndicator) syncIndicator.style.display = 'none';
-        showToast('Error en sincronización. Reintentando...', 'error');
-      }
-    })();
-  } 
-  // Detectar cambio de online a offline
-  else if (lastOnlineState && !currentOnlineState) {
-    console.log('🔌 Cambio detectado: Pasó de ONLINE a OFFLINE');
-    lastOnlineState = false;
-    if (offlineIndicator) offlineIndicator.style.display = 'block';
-    showToast('Sin conexión. Trabajando offline.', 'offline');
-  }
-}, 2000); // Verificar cada 2 segundos
-
-// También escuchar eventos nativos (para navegadores de escritorio)
-window.addEventListener('online', async () => {
-  console.log('🌐 Evento "online" detectado (navegador)');
-  lastOnlineState = true;
-  if (offlineIndicator) offlineIndicator.style.display = 'none';
-  
-  if (syncIndicator) syncIndicator.style.display = 'block';
-  showToast('Conexión recuperada. Sincronizando...', 'success');
-  
-  try {
-    console.log('Paso 1: Sincronizando registros offline...');
-    await syncOfflineRecords();
-    console.log('Paso 1 completado');
-    
-    if (photoQueue) {
-      console.log('Paso 2: Sincronizando fotos...');
-      await photoQueue.syncQueue();
-      console.log('Paso 2 completado');
-    }
-    
-    if (syncIndicator) syncIndicator.style.display = 'none';
-    showToast('✅ Sincronización completada.', 'success');
-    console.log('✅ Toda la sincronización completada');
-  } catch (e) {
-    console.error('Error durante sincronización:', e);
-    if (syncIndicator) syncIndicator.style.display = 'none';
-    showToast('Error en sincronización. Reintentando...', 'error');
-  }
-});
-
-// Sincronizar todos los registros guardados offline
-async function syncOfflineRecords() {
-  return new Promise((resolve) => {
-    try {
-      const dbRequest = indexedDB.open('ronda-offline-db', 1);
-      
-      dbRequest.onerror = () => {
-        console.error('❌ Error abriendo IndexedDB en syncOfflineRecords');
-        resolve();
-      };
-      
-      dbRequest.onsuccess = (event) => {
-        const db_offline = event.target.result;
-        const tx = db_offline.transaction(['pending-records'], 'readonly');
-        const store = tx.objectStore('pending-records');
-        const getAllRequest = store.getAll();
-        
-        getAllRequest.onsuccess = async () => {
-          const records = getAllRequest.result;
-          console.log(`🔄 Sincronizando ${records.length} registros offline...`);
-          
-          if (records.length === 0) {
-            console.log('✓ No hay registros para sincronizar');
-            resolve();
-            return;
-          }
-          
-          let syncedCount = 0;
-          let errorCount = 0;
-          
-          for (const record of records) {
-            if (!record.synced) {
-              try {
-                console.log(`📤 Enviando registro ${syncedCount + 1}/${records.length}: ${record.docId}`);
-                
-                const baseDoc = {
-                  punto: record.payload.puntoMarcacion,
-                  referenciaQR: record.payload.referenciaQR,
-                  nombreAgente: record.payload.nombreAgente,
-                  usuarioId: record.payload.usuarioId || usuarioLogueado,
-                  observacion: record.payload.observacion,
-                  tipo: record.payload.tipo,
-                  preguntas: record.payload.preguntas || {},
-                  timerElapsedSeconds: record.payload.timerElapsedSeconds,
-                  evidenciaUrl: '',
-                  fechaHoraISO: record.payload.fechaHoraISO,
-                  createdAt: fb.firestore.FieldValue.serverTimestamp(),
-                  meta: record.payload.meta || {},
-                  pendingUpload: !!record.payload.fotoDataUrl,
-                  synced: true,
-                  syncedAt: new Date().toISOString(),
-                  cliente: record.payload.cliente,     // ✅ CLIENTE
-                  unidad: record.payload.unidad,       // ✅ UNIDAD
-                  puesto: record.payload.puesto        // ✅ PUESTO
-                };
-                
-                // IMPORTANTE: Esperar a que se complete
-                await new Promise((promiseResolve, promiseReject) => {
-                  db.collection(FIRE_COLLECTION).doc(record.docId).set(baseDoc)
-                    .then(() => {
-                      console.log(`✓ Registro enviado exitosamente: ${record.docId}`);
-                      promiseResolve();
-                    })
-                    .catch(err => {
-                      console.error(`❌ Error enviando ${record.docId}:`, err?.message);
-                      promiseReject(err);
-                    });
-                });
-                
-                // Marcar como sincronizado en IndexedDB
-                const updateTx = db_offline.transaction(['pending-records'], 'readwrite');
-                const updateStore = updateTx.objectStore('pending-records');
-                record.synced = true;
-                
-                await new Promise((promiseResolve, promiseReject) => {
-                  const putReq = updateStore.put(record);
-                  putReq.onsuccess = promiseResolve;
-                  putReq.onerror = promiseReject;
-                });
-                
-                syncedCount++;
-                console.log(`✅ Registro marcado como sincronizado: ${record.docId}`);
-              } catch (e) {
-                errorCount++;
-                console.error(`❌ Error sincronizando ${record.docId}:`, e?.message);
-              }
-            }
-          }
-          
-          console.log(`✅ Sincronización completada: ${syncedCount}/${records.length} registros`);
-          if (errorCount > 0) {
-            console.warn(`⚠️ ${errorCount} registros tuvieron errores - se reintentarán más tarde`);
-          }
-          resolve();
-        };
-        
-        getAllRequest.onerror = () => {
-          console.error('❌ Error leyendo registros de IndexedDB');
-          resolve();
-        };
-      };
-    } catch (e) {
-      console.error('❌ Error en syncOfflineRecords:', e?.message);
-      resolve();
-    }
-  });
-}
-
-window.addEventListener('offline', () => {
-  if (offlineIndicator) offlineIndicator.style.display = 'block';
-  showToast('Sin conexión. Trabajando offline.', 'offline');
-});
-
-formSinNovedad?.addEventListener('submit', async e => {
-  e.preventDefault();
-  stopTimer();  // Detiene el cronómetro al enviar el formulario
-  if (!currentScannedData) return showToast('Primero escanea un punto.', 'error');
-  if (!usuarioLogueado) return showToast('Usuario no autenticado.', 'error');
-
-  const payload = buildPayload({
-    nombreAgente: usuarioLogueado, 
-    observacion: '', 
-    tipo: 'SIN NOVEDAD', 
-    fotoDataUrl: '', 
-    preguntas: {}
-  });
-
-  showSaving('Guardando…');
-  try {
-    await sendToFirebase(payload);
-    hideSaving();
-    if (isOnline()) {
-      showToast('Registro guardado. Foto sincronizando...', 'success');
-    } else {
-      showToast('Guardado offline. Se sincronizará al volver la red.', 'offline');
-    }
-    formSinNovedad.reset();
-    showUI('scanner'); 
-    cameraMsg?.classList.add('active');
-  } catch (err) {
-    console.error('Error guardando:', err);
-    hideSaving();
-    showToast('Error al guardar. Intenta nuevamente.', 'error');
-  }
-});
-
-formConNovedad?.addEventListener('submit', async e => {
-  e.preventDefault();
-  stopTimer();  // Detiene el cronómetro al enviar el formulario
-  if (!currentScannedData) return showToast('Primero escanea un punto.', 'error');
-  if (!usuarioLogueado) return showToast('Usuario no autenticado.', 'error');
-  
-  // Usar el nombre que ya está precargado (no editable)
-  const nombreCompleto = document.getElementById('agent-name-con-novedad').value.trim();
-  if (!nombreCompleto) return showToast('No se pudo cargar el nombre del usuario.', 'error');
-  
-  const obs = document.getElementById('observation-text').value.trim();
-
-  const getVal = n => document.querySelector(`input[name="${n}"]:checked`)?.value || '';
-  const [p1,p2,p3,p4,p5,p6] = ['q1','q2','q3','q4','q5','q6'].map(getVal);
-  if (![p1,p2,p3,p4,p5,p6].every(v => v === 'SI' || v === 'NO'))
-    return showToast('Responde todas las preguntas (1–6).', 'error');
-  const p6Comentario = (p6 === 'SI') ? q6Comment?.value.trim() : '';
-
-  const payload = buildPayload({
-    nombreAgente: nombreCompleto,
-    usuarioId: usuarioLogueado,
-    observacion: obs,
-    tipo: 'CON NOVEDAD',
-    fotoDataUrl: evidenceDataUrl,
-    preguntas: { p1,p2,p3,p4,p5,p6,p6Comentario }
-  });
-
-  showSaving('Guardando…');
-  try {
-    await sendToFirebase(payload);
-    hideSaving();
-    if (isOnline()) {
-      showToast('Registro guardado. Foto sincronizando...', 'success');
-    } else {
-      showToast('Guardado offline. Se sincronizará al volver la red.', 'offline');
-    }
-    formConNovedad.reset(); 
-    resetEvidence(); 
-    resetQuestions();
-    showUI('scanner'); 
-    cameraMsg?.classList.add('active');
-  } catch (err) {
-    console.error('Error guardando:', err);
-    hideSaving();
-    showToast('Error al guardar. Intenta nuevamente.', 'error');
-  }
-});
-
-async function buildPayload({ nombreAgente, usuarioId, observacion, tipo, fotoDataUrl, preguntas }) {
-  // Obtener cliente, unidad y puesto del offline storage
-  let cliente = '';
-  let unidad = '';
-  let puesto = '';
-  
-  if (typeof offlineStorage !== 'undefined') {
-    try {
-      const globalData = await offlineStorage.getGlobalData();
-      cliente = globalData?.['selected-cliente'] || '';
-      unidad = globalData?.['selected-unidad'] || '';
-      puesto = globalData?.['selected-puesto'] || '';
-      console.log('✅ Datos de organización cargados:', { cliente, unidad, puesto });
-    } catch (e) {
-      console.warn('Error obteniendo datos globales de offlineStorage:', e);
-    }
-  }
-  
-  return {
-    puntoMarcacion: currentScannedData.puntoMarcacion,
-    referenciaQR: currentScannedData.referencia,
-    fechaHoraISO: new Date().toISOString(),
-    nombreAgente, 
-    usuarioId: usuarioId || usuarioLogueado,
-    observacion, 
-    tipo, 
-    fotoDataUrl, 
-    preguntas,
-    timerElapsedSeconds: timerElapsedSeconds,
-    cliente,     // ✅ CLIENTE
-    unidad,      // ✅ UNIDAD
-    puesto,      // ✅ PUESTO
-    meta: {
-      ua: navigator.userAgent || '',
-      platform: navigator.platform || '',
-      lang: navigator.language || 'es',
-    }
-  };
-}
-
-// Guardar registro en IndexedDB como respaldo offline
-async function saveToOfflineDB(payload, docId) {
-  return new Promise((resolve, reject) => {
-    try {
-      const request = indexedDB.open('ronda-offline-db', 1);
-      
-      request.onerror = () => {
-        console.warn('Error abriendo IndexedDB en saveToOfflineDB');
-        reject(request.error);
-      };
-      
-      request.onsuccess = (event) => {
-        const db_offline = event.target.result;
-        const tx = db_offline.transaction(['pending-records'], 'readwrite');
-        const store = tx.objectStore('pending-records');
-        
-        const addRequest = store.add({
-          docId: docId,
-          payload: payload,
-          timestamp: Date.now(),
-          synced: false
-        });
-        
-        addRequest.onsuccess = () => {
-          console.log('✓ Registro guardado en IndexedDB:', docId);
-          resolve();
-        };
-        
-        addRequest.onerror = () => {
-          console.warn('Error agregando a IndexedDB:', addRequest.error?.message);
-          resolve(); // No rechazar, seguir adelante
-        };
-      };
-    } catch (e) {
-      console.warn('Error en saveToOfflineDB:', e?.message);
-      reject(e);
-    }
-  });
-}
-
-function sendToFirebase(payload) {
-  // RETORNA INMEDIATAMENTE - NO ESPERA
-  // Genera docId
-  const docId = makeDocId(payload);
-  
-  // 1) Guardar en IndexedDB como respaldo
-  saveToOfflineDB(payload, docId).catch(e => console.error('Fallo IndexedDB:', e));
-  
-  // 2) Intentar guardar en Firestore SIN ESPERAR
-  if (db) {
-    const baseDoc = {
-      punto: payload.puntoMarcacion,
-      referenciaQR: payload.referenciaQR,
-      nombreAgente: payload.nombreAgente,
-      usuarioId: payload.usuarioId || usuarioLogueado,
-      observacion: payload.observacion,
-      tipo: payload.tipo,
-      preguntas: payload.preguntas || {},
-      timerElapsedSeconds: payload.timerElapsedSeconds,
-      evidenciaUrl: '',
-      fechaHoraISO: payload.fechaHoraISO,
-      createdAt: fb.firestore.FieldValue.serverTimestamp(),
-      meta: payload.meta || {},
-      pendingUpload: !!payload.fotoDataUrl,
-      fotoOffline: (!payload.fotoDataUrl) ? false : !isOnline(),
-      cliente: payload.cliente,     // ✅ CLIENTE
-      unidad: payload.unidad,       // ✅ UNIDAD
-      puesto: payload.puesto        // ✅ PUESTO
-    };
-    
-    // FIRE AND FORGET - No esperamos
-    db.collection(FIRE_COLLECTION).doc(docId).set(baseDoc)
-      .catch(e => console.warn('Error al guardar en Firestore (será reintentado en sync):', e?.message));
-  }
-
-  // 3) Manejo de evidencia EN BACKGROUND
-  if (payload.fotoDataUrl && storage) {
-    const stamp = Date.now();
-    const safeName = (payload.nombreAgente || 'anon').replace(/[^\w.-]+/g, '_');
-    const storagePath = `evidencias/${payload.referenciaQR}/${stamp}_${safeName}.jpg`;
-    const blob = dataURLtoBlob(payload.fotoDataUrl);
-
-    if (!isOnline()) {
-      // Sin conexión: agregar a cola
-      if (photoQueue) {
-        photoQueue.addPhoto({
-          docId: docId,
-          path: storagePath,
-          collectionName: FIRE_COLLECTION,
-          urlField: 'evidenciaUrl'
-        }, blob).catch(e => console.error('Error en cola offline:', e));
-      }
-    } else {
-      // Con conexión: subir en background
-      uploadAndPatch(docId, storagePath, blob)
-        .catch(e => {
-          console.error('Error subida foto:', e?.message);
-          if (photoQueue) {
-            photoQueue.addPhoto({
-              docId: docId,
-              path: storagePath,
-              collectionName: FIRE_COLLECTION,
-              urlField: 'evidenciaUrl'
-            }, blob).catch(e2 => console.error('Fallback failed:', e2));
-          }
-        });
-    }
-  }
-  
-  // RETORNA INMEDIATAMENTE - La promesa se resuelve al instante
-  return Promise.resolve();
-}
-
-// Versión no-await de upload y patch
-async function uploadAndPatchBackground(docId, storagePath, blob) {
-  try {
-    const ref = storage.ref().child(storagePath);
-    await ref.put(blob, { contentType: blob.type });
-    const url = await ref.getDownloadURL();
-    await db.collection(FIRE_COLLECTION).doc(docId).update({
-      evidenciaUrl: url,
-      pendingUpload: false,
-      reconectadoEn: new Date().toISOString()
-    });
-    console.log('✓ Foto sincronizada en background:', docId);
-  } catch (e) {
-    console.error('Error background:', e?.message);
-  }
-}
-
-// =============================
-// TOAST
-// =============================
-function showToast(msg, type = 'info') {
-  if (!statusToast) return alert(msg);
-  statusToast.textContent = msg;
-  statusToast.className = `show ${type}`;
-  setTimeout(() => (statusToast.className = statusToast.className.replace('show', '')), 3000);
-}
-
-// =============================
-// AUTENTICACIÓN
-// =============================
-if (auth) {
+// ronda.js (v65) - Control de Rondas con QR
+// Funcionalidad: Listar rondas, validar horarios/frecuencia, iniciar marcación
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Firebase ya debe estar inicializado
+  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
+
+  let currentUser = null;
+  let userCtx = { email: '', uid: '', cliente: '', unidad: '', puesto: '' };
+  let rondaActiva = null; // Ronda actualmente en progreso
+  let tiempoInicio = null;
+
+  // ===================== OBTENER USUARIO =====================
   auth.onAuthStateChanged(async (user) => {
     if (!user) {
-      // Si no hay usuario logueado, redirigir al login
       window.location.href = 'index.html';
       return;
     }
-    // Guardar el email del usuario logueado (sin @liderman.com.pe)
-    usuarioLogueado = user.email ? user.email.split('@')[0] : user.uid;
-    console.log('Usuario logueado:', usuarioLogueado);
-    
-    const nombreField = document.getElementById('agent-name-con-novedad');
-    let nombreCompleto = usuarioLogueado; // fallback
-    
-    // Cargar el nombre completo desde Firestore
+
+    currentUser = user;
+    userCtx.email = user.email;
+    userCtx.uid = user.uid;
+
+    // Obtener datos del usuario
     try {
-      const userDoc = await db.collection('USUARIOS').doc(usuarioLogueado).get();
-      if (userDoc.exists) {
-        const userData = userDoc.data();
-        nombreCompleto = `${userData.NOMBRES || ''} ${userData.APELLIDOS || ''}`.trim();
-        console.log('✓ Nombre del usuario cargado desde Firestore:', nombreCompleto);
+      if (window.OfflineStorage) {
+        const userData = await window.OfflineStorage.getUserData();
+        if (userData && userData.cliente && userData.unidad && userData.puesto) {
+          userCtx.cliente = userData.cliente;
+          userCtx.unidad = userData.unidad;
+          userCtx.puesto = userData.puesto;
+          console.log('✓ Datos obtenidos de OfflineStorage');
+          cargarRondas();
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('OfflineStorage error:', e.message);
+    }
+
+    // Obtener de Firestore si no está en OfflineStorage
+    try {
+      const userId = user.email.split('@')[0];
+      const snap = await db.collection('USUARIOS').doc(userId).get();
+      
+      if (snap.exists) {
+        const datos = snap.data();
+        userCtx.cliente = datos.CLIENTE || datos.cliente || '';
+        userCtx.unidad = datos.UNIDAD || datos.unidad || '';
+        userCtx.puesto = datos.PUESTO || datos.puesto || '';
         
-        // 💾 Guardar en offline storage para acceso futuro sin internet
-        if (typeof offlineStorage !== 'undefined') {
-          await offlineStorage.setUserData({
-            email: user.email,
-            userId: usuarioLogueado,
-            nombres: userData.NOMBRES || '',
-            apellidos: userData.APELLIDOS || '',
-            cliente: userData.CLIENTE || '',
-            unidad: userData.UNIDAD || '',
-            puesto: userData.PUESTO || ''
-          }).catch(e => console.warn('Error guardando en offlineStorage:', e));
+        console.log('✓ Datos obtenidos de Firestore');
+        cargarRondas();
+      }
+    } catch (e) {
+      console.error('Error obteniendo usuario:', e);
+    }
+  });
+
+  // ===================== CARGAR RONDAS =====================
+  async function cargarRondas() {
+    const listDiv = document.getElementById('rondas-list') || crearContenedor();
+    listDiv.innerHTML = '<p style="text-align:center; padding:20px;">Cargando rondas...</p>';
+
+    try {
+      const query = db.collection('Ronda_QR')
+        .where('cliente', '==', userCtx.cliente)
+        .where('unidad', '==', userCtx.unidad);
+
+      const snapshot = await query.get();
+
+      if (snapshot.empty) {
+        listDiv.innerHTML = '<p style="text-align:center; padding:20px; color:#999;">No hay rondas asignadas</p>';
+        return;
+      }
+
+      listDiv.innerHTML = '';
+      snapshot.forEach(doc => {
+        const ronda = doc.data();
+        const estado = validarRonda(ronda);
+        crearCardRonda(listDiv, doc.id, ronda, estado);
+      });
+
+    } catch (error) {
+      console.error('Error cargando rondas:', error);
+      listDiv.innerHTML = '<p style="color:red; text-align:center; padding:20px;">Error al cargar rondas</p>';
+    }
+  }
+
+  // ===================== VALIDAR RONDA =====================
+  function validarRonda(ronda) {
+    const ahora = new Date();
+    const horaActual = `${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`;
+    const diaHoy = ahora.getDay();
+    
+    let activa = false;
+    let motivo = '';
+
+    // Validar frecuencia
+    if (ronda.frecuencia === 'diaria') {
+      // Validar horario
+      if (ronda.horario && ronda.tolerancia && ronda.toleranciaTipo) {
+        const [horaIni, minIni] = ronda.horario.split(':').map(Number);
+        const minToleranciaTot = ronda.toleranciaTipo === 'minutos' ? ronda.tolerancia : ronda.tolerancia * 60;
+        
+        const inicioMs = horaIni * 3600000 + minIni * 60000;
+        const finMs = inicioMs + minToleranciaTot * 60000;
+        const ahoraMs = ahora.getHours() * 3600000 + ahora.getMinutes() * 60000;
+
+        if (ahoraMs >= inicioMs && ahoraMs <= finMs) {
+          activa = true;
+        } else {
+          motivo = ahoraMs < inicioMs ? 'Aún no comienza' : 'Horario expirado';
         }
       } else {
-        console.warn('Documento de usuario no existe en Firestore:', usuarioLogueado);
+        activa = true; // Sin validación de horario
       }
-    } catch (firestoreError) {
-      console.warn('Error cargando de Firestore (probablemente sin internet):', firestoreError?.message);
+    } else {
+      motivo = 'Frecuencia no configurada';
+    }
+
+    return { activa, motivo, horaActual };
+  }
+
+  // ===================== CREAR CARD RONDA =====================
+  function crearCardRonda(container, docId, ronda, estado) {
+    const card = document.createElement('div');
+    card.style.cssText = `
+      background: var(--surface, #222);
+      border: 1px solid var(--border, #333);
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      opacity: ${estado.activa ? '1' : '0.5'};
+    `;
+
+    const numPuntos = ronda.puntoRonda ? Object.keys(ronda.puntoRonda).length : 0;
+
+    card.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0; color:var(--text-primary, #fff);">${ronda.nombre || 'Ronda sin nombre'}</h3>
+        <span style="background:${estado.activa ? '#4ade80' : '#888'}; color:#fff; padding:4px 8px; border-radius:4px; font-size:0.8em;">
+          ${estado.activa ? 'Activa' : 'Inactiva'}
+        </span>
+      </div>
       
-      // FALLBACK: Intentar cargar del cache offline
-      if (typeof offlineStorage !== 'undefined') {
-        try {
-          const cachedUser = await offlineStorage.getUserData();
-          if (cachedUser && cachedUser.userId === usuarioLogueado) {
-            nombreCompleto = `${cachedUser.nombres} ${cachedUser.apellidos}`.trim();
-            console.log('✓ Nombre del usuario cargado desde cache offline:', nombreCompleto);
-          } else if (cachedUser) {
-            console.log('Usuario en cache es diferente - limpiando...');
-            await offlineStorage.clearAll();
-          }
-        } catch (cacheError) {
-          console.warn('Error cargando cache offline:', cacheError?.message);
-        }
+      <div style="font-size:0.9em; color:var(--text-secondary, #ccc);">
+        <div>📍 Puntos: ${numPuntos}</div>
+        <div>🕐 Horario: ${ronda.horario || 'Sin horario'}</div>
+        <div>⏱️ Tolerancia: ${ronda.tolerancia} ${ronda.toleranciaTipo || 'min'}</div>
+        ${!estado.activa ? `<div style="color:#f87171;">⚠️ ${estado.motivo}</div>` : ''}
+      </div>
+      
+      <button class="btn-iniciar-ronda" data-doc-id="${docId}" ${!estado.activa ? 'disabled' : ''} 
+        style="
+          padding: 10px;
+          border: none;
+          border-radius: 6px;
+          cursor: ${estado.activa ? 'pointer' : 'not-allowed'};
+          background: ${estado.activa ? 'var(--primary, #3b82f6)' : '#666'};
+          color: white;
+          font-weight: 500;
+          transition: opacity 0.2s;
+        "
+      >
+        Iniciar Ronda
+      </button>
+    `;
+
+    container.appendChild(card);
+
+    // Event listener
+    const btn = card.querySelector('.btn-iniciar-ronda');
+    if (estado.activa) {
+      btn.addEventListener('click', () => abrirModalIniciarRonda(docId, ronda));
+    }
+  }
+
+  // ===================== CREAR CONTENEDOR SI NO EXISTE =====================
+  function crearContenedor() {
+    let div = document.getElementById('rondas-list');
+    if (!div) {
+      div = document.createElement('div');
+      div.id = 'rondas-list';
+      div.style.cssText = 'padding:15px; max-width:640px; margin:0 auto;';
+      
+      const main = document.querySelector('main') || document.body;
+      main.appendChild(div);
+    }
+    return div;
+  }
+
+  // ===================== MODAL INICIAR RONDA =====================
+  function abrirModalIniciarRonda(docId, ronda) {
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 15px;
+    `;
+
+    modal.innerHTML = `
+      <div style="
+        background: var(--surface, #222);
+        border-radius: 12px;
+        padding: 20px;
+        max-width: 500px;
+        width: 100%;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      ">
+        <h3 style="margin-top:0;">¿Desea iniciar la ronda?</h3>
+        <p style="color:var(--text-secondary, #ccc); margin:10px 0;">
+          <strong>${ronda.nombre}</strong><br>
+          Se abrirá el sistema de marcación con cronómetro.
+        </p>
+        
+        <div style="display:flex; gap:10px; margin-top:20px;">
+          <button class="btn-cancelar" style="flex:1; padding:10px; border:1px solid var(--border, #444); background:transparent; color:var(--text-primary, #fff); border-radius:6px; cursor:pointer;">
+            Cancelar
+          </button>
+          <button class="btn-iniciar" style="flex:1; padding:10px; border:none; background:var(--primary, #3b82f6); color:#fff; border-radius:6px; cursor:pointer; font-weight:500;">
+            Iniciar
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    modal.querySelector('.btn-cancelar').addEventListener('click', () => {
+      modal.remove();
+    });
+
+    modal.querySelector('.btn-iniciar').addEventListener('click', () => {
+      modal.remove();
+      iniciarRonda(docId, ronda);
+    });
+  }
+
+  // ===================== INICIAR RONDA =====================
+  function iniciarRonda(docId, ronda) {
+    rondaActiva = { docId, ronda };
+    tiempoInicio = Date.now();
+    
+    // Guardar en sessionStorage para recuperar si se cierra
+    sessionStorage.setItem('ronda_activa', JSON.stringify({
+      docId,
+      tiempoInicio,
+      rondaNombre: ronda.nombre
+    }));
+
+    console.log('🚀 Ronda iniciada:', ronda.nombre);
+
+    // Mostrar pantalla de marcación
+    mostrarPantalaMarcacion(ronda);
+  }
+
+  // ===================== PANTALLA MARCACIÓN =====================
+  function mostrarPantalaMarcacion(ronda) {
+    // Crear contenedor si no existe
+    let marcacionDiv = document.getElementById('marcacion-container');
+    if (!marcacionDiv) {
+      marcacionDiv = document.createElement('div');
+      marcacionDiv.id = 'marcacion-container';
+      document.body.appendChild(marcacionDiv);
+    }
+
+    const numPuntos = ronda.puntoRonda ? Object.keys(ronda.puntoRonda).length : 0;
+
+    marcacionDiv.innerHTML = `
+      <div style="
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--background, #111);
+        z-index: 999;
+        display: flex;
+        flex-direction: column;
+        padding: 15px;
+      ">
+        <header style="
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 15px;
+          padding-bottom: 10px;
+          border-bottom: 1px solid var(--border, #333);
+        ">
+          <h2 style="margin:0; color:var(--text-primary, #fff);">${ronda.nombre}</h2>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <span id="cronometro" style="font-size:1.2em; font-weight:bold; color:var(--primary, #3b82f6); font-family:monospace;">00:00:00</span>
+            <button id="btn-terminar-ronda" style="
+              padding: 8px 12px;
+              background: #ef4444;
+              color: white;
+              border: none;
+              border-radius: 6px;
+              cursor: pointer;
+              font-weight: 500;
+            ">
+              Terminar Ronda
+            </button>
+          </div>
+        </header>
+
+        <div style="flex:1; overflow-y:auto;">
+          <div id="puntos-marcacion" style="display:flex; flex-direction:column; gap:10px;">
+            <!-- Se llenará con los puntos -->
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Iniciar cronómetro
+    iniciarCronometro();
+
+    // Cargar puntos
+    cargarPuntosRonda(ronda);
+
+    // Botón terminar ronda
+    document.getElementById('btn-terminar-ronda').addEventListener('click', terminarRonda);
+  }
+
+  // ===================== CRONÓMETRO =====================
+  let intervaloCronometro = null;
+
+  function iniciarCronometro() {
+    const cronometroEl = document.getElementById('cronometro');
+    
+    if (intervaloCronometro) clearInterval(intervaloCronometro);
+
+    intervaloCronometro = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - tiempoInicio) / 1000);
+      const horas = Math.floor(elapsed / 3600);
+      const minutos = Math.floor((elapsed % 3600) / 60);
+      const segundos = elapsed % 60;
+
+      cronometroEl.textContent = 
+        `${String(horas).padStart(2, '0')}:${String(minutos).padStart(2, '0')}:${String(segundos).padStart(2, '0')}`;
+
+      // Guardar progreso cada 10 segundos
+      if (elapsed % 10 === 0) {
+        sessionStorage.setItem('ronda_tiempo', String(elapsed));
       }
+    }, 1000);
+  }
+
+  // ===================== CARGAR PUNTOS RONDA =====================
+  function cargarPuntosRonda(ronda) {
+    const container = document.getElementById('puntos-marcacion');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (!ronda.puntoRonda) {
+      container.innerHTML = '<p style="color:#999;">Sin puntos de ronda configurados</p>';
+      return;
     }
-    
-    // Mostrar el nombre en el formulario
-    if (nombreField) {
-      nombreField.value = nombreCompleto;
-      nombreField.disabled = true; // No editable
+
+    Object.entries(ronda.puntoRonda).forEach(([indice, punto]) => {
+      const card = document.createElement('div');
+      card.style.cssText = `
+        background: var(--surface, #222);
+        border: 1px solid var(--border, #333);
+        border-radius: 8px;
+        padding: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+      `;
+
+      const numQRs = punto.length;
+      card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <strong style="color:var(--text-primary, #fff);">Punto ${parseInt(indice) + 1}</strong>
+            <div style="font-size:0.8em; color:var(--text-secondary, #ccc);">📍 ${numQRs} código(s) QR</div>
+          </div>
+          <div style="
+            background: var(--primary, #3b82f6);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 500;
+          ">
+            Marcar
+          </div>
+        </div>
+      `;
+
+      card.addEventListener('click', () => {
+        abrirEscaneadorPunto(ronda, indice, punto);
+      });
+
+      container.appendChild(card);
+    });
+  }
+
+  // ===================== ESCANEADOR PUNTO =====================
+  async function abrirEscaneadorPunto(ronda, indice, codigosQR) {
+    console.log(`📸 Abriendo escaneador para punto ${indice}`, codigosQR);
+
+    // Crear modal de escaneador
+    const modal = document.createElement('div');
+    modal.id = 'scanner-modal';
+    modal.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #000;
+      z-index: 2000;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 15px;
+    `;
+
+    modal.innerHTML = `
+      <div style="text-align:center; color:white; margin-bottom:20px;">
+        <h3>Escanear QR - Punto ${parseInt(indice) + 1}</h3>
+        <p style="font-size:0.9em; color:#ccc;">Apunta la cámara al código QR</p>
+      </div>
+      <video id="scanner-video" style="width:100%; max-width:400px; border-radius:8px; background:#111;"></video>
+      <canvas id="scanner-canvas" hidden></canvas>
+      <div style="margin-top:20px; color:white;">
+        <p id="scanner-status" style="margin:0; font-size:0.9em; color:#aaa;">Esperando código...</p>
+        <p id="scanner-result" style="margin:10px 0 0; font-size:0.9em; color:#4ade80;"></p>
+      </div>
+      <button id="btn-close-scanner" style="
+        margin-top:20px;
+        padding:10px 20px;
+        background:#ef4444;
+        color:white;
+        border:none;
+        border-radius:6px;
+        cursor:pointer;
+        font-weight:500;
+      ">
+        Cerrar
+      </button>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Cargar zxing si no está disponible
+    if (!window.ZXing) {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.2/umd/index.min.js';
+      script.onload = () => iniciarEscaneo();
+      document.head.appendChild(script);
+    } else {
+      iniciarEscaneo();
     }
+
+    function iniciarEscaneo() {
+      const video = document.getElementById('scanner-video');
+      const canvas = document.getElementById('scanner-canvas');
+      const statusEl = document.getElementById('scanner-status');
+      const resultEl = document.getElementById('scanner-result');
+
+      let qrsEscaneados = [];
+
+      // Acceder a cámara
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        .then(stream => {
+          video.srcObject = stream;
+          video.play();
+
+          // Configurar escaneador
+          const codeReader = new window.ZXing.BrowserMultiFormatReader();
+
+          const scanLoop = () => {
+            const canvasContext = canvas.getContext('2d');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            if (canvas.width > 0 && canvas.height > 0) {
+              canvasContext.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+              try {
+                const imageData = canvasContext.getImageData(0, 0, canvas.width, canvas.height);
+                const luminanceSource = new window.ZXing.HTMLCanvasElementLuminanceSource(canvas);
+                const binaryBitmap = new window.ZXing.BinaryBitmap(
+                  new window.ZXing.HybridBinarizer(luminanceSource)
+                );
+                const result = codeReader.decodeFromBitmap(binaryBitmap);
+
+                if (result) {
+                  const qrId = result.getText();
+                  console.log('✓ QR Escaneado:', qrId);
+
+                  // Validar que el QR esté en los códigos esperados
+                  if (codigosQR.includes(qrId)) {
+                    // QR válido
+                    if (!qrsEscaneados.includes(qrId)) {
+                      qrsEscaneados.push(qrId);
+                      resultEl.textContent = `✓ ${qrId} (${qrsEscaneados.length}/${codigosQR.length})`;
+                      resultEl.style.color = '#4ade80';
+
+                      // Obtener información del QR desde la colección QR_CODES
+                      obtenerInfoQR(qrId, ronda, indice, codigosQR);
+
+                      // Si se escanearon todos, cerrar automáticamente
+                      if (qrsEscaneados.length === codigosQR.length) {
+                        statusEl.textContent = '✓ Punto completado!';
+                        setTimeout(() => {
+                          cerrarScanner();
+                        }, 1500);
+                      }
+                    }
+                  } else {
+                    resultEl.textContent = `✗ QR no válido para este punto`;
+                    resultEl.style.color = '#f87171';
+                  }
+                }
+              } catch (e) {
+                // Sin QR detectado, continuar
+              }
+            }
+
+            if (modal.parentElement) {
+              requestAnimationFrame(scanLoop);
+            }
+          };
+
+          scanLoop();
+        })
+        .catch(err => {
+          console.error('Error accediendo cámara:', err);
+          statusEl.textContent = '✗ No se pudo acceder a la cámara';
+          resultEl.style.color = '#f87171';
+        });
+    }
+
+    // Botón cerrar
+    modal.querySelector('#btn-close-scanner').addEventListener('click', cerrarScanner);
+
+    function cerrarScanner() {
+      const video = document.getElementById('scanner-video');
+      if (video && video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+      }
+      modal.remove();
+    }
+  }
+
+  // ===================== OBTENER INFO QR =====================
+  async function obtenerInfoQR(qrId, ronda, puntoIndice, codigosQR) {
+    try {
+      const snap = await db.collection('QR_CODES').doc(qrId).get();
+
+      if (snap.exists) {
+        const qrData = snap.data();
+        console.log('📋 Info QR:', qrData);
+
+        // Verificar si requiere preguntas
+        if (qrData.questions && qrData.questions.some(q => q.requireQuestion === true)) {
+          console.log('❓ Este QR requiere responder preguntas');
+          abrirModalPreguntas(qrId, qrData, ronda, puntoIndice);
+        } else {
+          // Sin preguntas, guardar marcación directamente
+          guardarMarcacion(qrId, ronda, puntoIndice, qrData, {});
+        }
+      } else {
+        console.warn('QR no encontrado en QR_CODES:', qrId);
+      }
+    } catch (e) {
+      console.error('Error obteniendo info del QR:', e);
+    }
+  }
+
+  // ===================== MODAL PREGUNTAS =====================
+  function abrirModalPreguntas(qrId, qrData, ronda, puntoIndice) {
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2001;
+      padding: 15px;
+    `;
+
+    const respuestas = {};
+
+    let contenidoPreguntas = '';
+    if (qrData.questions && Array.isArray(qrData.questions)) {
+      qrData.questions.forEach((q, idx) => {
+        if (q.requireQuestion === true) {
+          contenidoPreguntas += `
+            <div style="margin-bottom:15px; padding:12px; background:var(--background, #111); border-radius:6px;">
+              <label style="display:block; margin-bottom:8px; font-weight:500;">
+                ${q.nombre || `Pregunta ${idx + 1}`}
+              </label>
+              <textarea id="resp-${idx}" rows="3" style="
+                width:100%;
+                padding:8px;
+                background:var(--surface, #222);
+                border:1px solid var(--border, #333);
+                border-radius:4px;
+                color:var(--text-primary, #fff);
+                font-family:inherit;
+                box-sizing:border-box;
+              " placeholder="Tu respuesta..."></textarea>
+            </div>
+          `;
+        }
+      });
+    }
+
+    modal.innerHTML = `
+      <div style="
+        background: var(--surface, #222);
+        border-radius: 12px;
+        padding: 20px;
+        max-width: 500px;
+        width: 100%;
+        max-height: 80vh;
+        overflow-y: auto;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      ">
+        <h3 style="margin-top:0; color:var(--text-primary, #fff);">Responder Preguntas</h3>
+        <p style="color:var(--text-secondary, #ccc);">QR: <strong>${qrId}</strong></p>
+        
+        ${contenidoPreguntas}
+        
+        <div style="display:flex; gap:10px; margin-top:20px;">
+          <button class="btn-cancelar" style="flex:1; padding:10px; border:1px solid var(--border, #444); background:transparent; color:var(--text-primary, #fff); border-radius:6px; cursor:pointer;">
+            Cancelar
+          </button>
+          <button class="btn-confirmar" style="flex:1; padding:10px; border:none; background:var(--primary, #3b82f6); color:#fff; border-radius:6px; cursor:pointer; font-weight:500;">
+            Confirmar
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    modal.querySelector('.btn-cancelar').addEventListener('click', () => {
+      modal.remove();
+    });
+
+    modal.querySelector('.btn-confirmar').addEventListener('click', () => {
+      // Recopilar respuestas
+      if (qrData.questions && Array.isArray(qrData.questions)) {
+        qrData.questions.forEach((q, idx) => {
+          if (q.requireQuestion === true) {
+            respuestas[`pregunta_${idx}`] = document.getElementById(`resp-${idx}`)?.value || '';
+          }
+        });
+      }
+
+      console.log('✓ Respuestas guardadas:', respuestas);
+      guardarMarcacion(qrId, ronda, puntoIndice, qrData, respuestas);
+      modal.remove();
+    });
+  }
+
+  // ===================== GUARDAR MARCACIÓN =====================
+  async function guardarMarcacion(qrId, ronda, puntoIndice, qrData, respuestas) {
+    if (!rondaActiva) return;
+
+    try {
+      const ahora = new Date();
+      const docId = `${rondaActiva.docId}_${puntoIndice}_${qrId}_${Date.now()}`;
+
+      const marcacionData = {
+        rondaId: rondaActiva.docId,
+        rondaNombre: ronda.nombre,
+        punto: parseInt(puntoIndice),
+        qrId: qrId,
+        qrNombre: qrData.nombre || qrData.qrId || 'Sin nombre',
+        usuario: {
+          email: currentUser.email,
+          uid: currentUser.uid
+        },
+        cliente: userCtx.cliente,
+        unidad: userCtx.unidad,
+        puesto: userCtx.puesto,
+        timestamp: ahora.toISOString(),
+        respuestas: respuestas,
+        tiempoTranscurrido: Math.floor((ahora - new Date(tiempoInicio)) / 1000)
+      };
+
+      // Guardar en Firestore
+      await db.collection('RONDAS').doc(docId).set(marcacionData);
+      console.log('✓ Marcación guardada:', docId);
+
+      // Actualizar UI
+      const modal = document.getElementById('scanner-modal');
+      if (modal) {
+        const statusEl = document.getElementById('scanner-status');
+        if (statusEl) statusEl.textContent = '✓ Marcación guardada';
+      }
+    } catch (e) {
+      console.error('Error guardando marcación:', e);
+      alert('Error: ' + e.message);
+    }
+  }
+
+  // ===================== TERMINAR RONDA =====================
+  function terminarRonda() {
+    if (!rondaActiva) return;
+
+    const confirmar = confirm('¿Está seguro de terminar la ronda?');
+    if (!confirmar) return;
+
+    if (intervaloCronometro) clearInterval(intervaloCronometro);
+
+    const tiempoTotal = Math.floor((Date.now() - tiempoInicio) / 1000);
     
-    // Iniciar la UI solo después de autenticar
-    showUI('scanner');
-    cameraMsg?.classList.add('active');  // Mostrar "INICIAR RONDAS"
+    console.log('✓ Ronda terminada después de', tiempoTotal, 'segundos');
+
+    // Limpiar
+    sessionStorage.removeItem('ronda_activa');
+    sessionStorage.removeItem('ronda_tiempo');
+    rondaActiva = null;
+    tiempoInicio = null;
+
+    const marcacionDiv = document.getElementById('marcacion-container');
+    if (marcacionDiv) marcacionDiv.remove();
+
+    // Volver a mostrar lista
+    cargarRondas();
+  }
+
+  // ===================== RECUPERAR RONDA EN PROGRESO =====================
+  window.addEventListener('load', () => {
+    const rondaEnCache = sessionStorage.getItem('ronda_activa');
+    if (rondaEnCache) {
+      const { tiempoInicio: tiempoGuardado } = JSON.parse(rondaEnCache);
+      tiempoInicio = tiempoGuardado;
+      console.log('📝 Ronda recuperada del caché');
+      // TODO: Recuperar y mostrar estado anterior
+    }
   });
-} else {
-  console.error('Auth no está disponible');
-}
+});
