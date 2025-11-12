@@ -6,8 +6,8 @@
   <title>Liderman - Acceso</title>
 
   <!-- Estilos -->
-  <link rel="stylesheet" href="style.css?v=65"/>
-  <link rel="stylesheet" href="webview.css?v=65"/>
+  <link rel="stylesheet" href="style.css?v=69"/>
+  <link rel="stylesheet" href="webview.css?v=69"/>
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.0/css/all.min.css">
 
@@ -46,6 +46,11 @@
             <input type="password" id="login-pass" required autocomplete="current-password" minlength="6"/>
           </div>
           <button id="login-btn" type="submit" class="btn-primary">Acceder</button>
+          <div style="text-align:center; margin-top:1rem;">
+            <a href="limpiar-cache.html?auto=true" style="font-size:0.9rem; color:#667eea; text-decoration:none; display:inline-block; padding:0.5rem 1rem; border-radius:4px;">
+              🧹 Limpiar Cache
+            </a>
+          </div>
         </form>
       </div>
     </div>
@@ -192,13 +197,13 @@
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore-compat.js"></script>
 
   <!-- Config / Inicialización -->
-  <script src="firebase-config.js?v=65"></script>
-  <script src="initFirebase.js?v=65"></script>
-  <script src="ui.js?v=65"></script>
-  <script src="webview.js?v=65"></script>
+  <script src="firebase-config.js?v=69"></script>
+  <script src="initFirebase.js?v=69"></script>
+  <script src="ui.js?v=69"></script>
+  <script src="webview.js?v=69"></script>
 
   <!-- Lógica de autenticación -->
-  <script src="auth.js?v=65"></script>
+  <script src="auth.js?v=69"></script>
 
   <!-- Auto-redirect si hay sesión activa -->
   <script>
@@ -229,7 +234,7 @@
 
     // Service Worker
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js?v=65').catch(()=>{});
+      navigator.serviceWorker.register('./sw.js?v=69').catch(()=>{});
     }
   </script>
 </body>

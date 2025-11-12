@@ -1,6 +1,8 @@
-// menu.js (v53a) — Relevo funcional, cambio de sesión sin redirigir al login, iframes “+” habilitados
+// menu.js (v69) — Relevo funcional, cambio de sesión sin redirigir al login
 document.addEventListener("DOMContentLoaded", () => {
+  // Solo inicializar si aún no lo hemos hecho
   if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  
   const auth = firebase.auth();
   const db = firebase.firestore();
 

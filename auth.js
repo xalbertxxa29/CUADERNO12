@@ -1,6 +1,6 @@
-// auth.js v56 — Login + Registro + Catálogos (Cliente/Unidad/Puesto) con compatibilidad de esquemas
+// auth.js v69 — Login + Registro + Catálogos (Cliente/Unidad/Puesto) con compatibilidad de esquemas
 (() => {
-  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  // Firebase ya está inicializado en initFirebase.js, solo obtener referencias
   const auth = firebase.auth();
   const db   = firebase.firestore();
 
@@ -285,7 +285,8 @@
     const user = String(($('login-email')?.value||'')).trim();
     const pass = String(($('login-pass')?.value||''));
     if (!user || !pass) return UX.alert('Aviso','Completa usuario y contraseña.');
-    const email = user.includes('@') ? user : `${user}@lidercontrol.local`;
+    // El email siempre usa dominio @liderman.com.pe
+    const email = user.includes('@') ? user : `${user}@liderman.com.pe`;
     try {
       UX.show('Ingresando…');
       await auth.signInWithEmailAndPassword(email, pass);
@@ -321,23 +322,40 @@
 
     try {
       UX.show('Creando cuenta…');
-      const email = id.includes('@') ? id : `${id}@lidercontrol.local`;
-
+      // El email siempre es con dominio @liderman.com.pe
+      const email = `${id}@liderman.com.pe`;
+      
+      // Crear usuario en Firebase Auth
       await auth.createUserWithEmailAndPassword(email, p1);
-      await db.collection('USUARIOS').doc(id.includes('@') ? id.split('@')[0] : id).set({
-        ID: id.includes('@') ? id.split('@')[0] : id,
-        NOMBRES: nom.toUpperCase(),
-        APELLIDOS: ape.toUpperCase(),
-        CLIENTE: cli.toUpperCase(),
-        UNIDAD: uni.toUpperCase(),
-        PUESTO: pue.toUpperCase(),
-        TIPO: tipo || 'AGENTE',
-        ESTADO: 'ACTIVO',
-        creadoEn: firebase.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
+      
+      // Guardar información en colección USUARIOS
+      // El ID del documento es SOLO el ID sin dominio
+      try {
+        await db.collection('USUARIOS').doc(id).set({
+          ID: id,
+          NOMBRES: nom.toUpperCase(),
+          APELLIDOS: ape.toUpperCase(),
+          CLIENTE: cli.toUpperCase(),
+          UNIDAD: uni.toUpperCase(),
+          PUESTO: pue.toUpperCase(),
+          TIPO: tipo || 'AGENTE',
+          ESTADO: 'ACTIVO',
+          EMAIL: email,
+          creadoEn: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        console.log('[auth] Usuario guardado en USUARIOS/', id, ':', {ID: id, NOMBRES: nom, APELLIDOS: ape, CLIENTE: cli, UNIDAD: uni, PUESTO: pue});
+      } catch (e) {
+        console.error('[auth] Error guardando usuario en Firestore:', e);
+        // Continuar con redirección aunque falle Firestore (auth ya existe)
+      }
 
       UX.hide();
-      UX.alert('Éxito','Cuenta creada correctamente.', () => location.href='menu.html');
+      UX.alert('Éxito','Cuenta creada correctamente. Redirigiendo...', () => {
+        // Esperar a que localStorage se actualice antes de redirigir
+        setTimeout(() => { 
+          location.href='menu.html'; 
+        }, 500);
+      });
     } catch (err) {
       console.error(err); UX.hide();
       const msg =

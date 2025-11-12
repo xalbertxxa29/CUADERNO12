@@ -1,8 +1,12 @@
-// initFirebase.js (v60) — Firebase compat + offline robusto para WebView
+// initFirebase.js (v69) — Firebase compat + offline robusto para WebView
+// - Protección contra reinicialización múltiple
 // - Persistencia Firestore con synchronizeTabs
 // - Ajustes WebView (long polling) y undefined props
 // - Warm-up de caché de consultas e imágenes
 // - SW: registro y autoupdate
+
+if (!window.__FIREBASE_INITIALIZED__) {
+  window.__FIREBASE_INITIALIZED__ = true;
 
 (function () {
   // --- App ---
@@ -35,23 +39,26 @@
     console.warn('[Firestore] settings warn:', e?.message || e);
   }
 
-  // --- Firestore: persistencia offline ---
-  (async () => {
-    try {
-      await firebase.firestore().enablePersistence({ synchronizeTabs: true });
-      console.log('[Firestore] Persistencia habilitada (multi-tab).');
-    } catch (err) {
-      const code = err && err.code;
-      if (code === 'failed-precondition') {
-        // Otra pestaña/instancia ya posee la persistencia
-        console.warn('[Firestore] Persistencia no habilitada: múltiples instancias compiten por el owner.');
-      } else if (code === 'unimplemented') {
-        console.warn('[Firestore] Persistencia no soportada en este navegador/WebView.');
-      } else {
-        console.warn('[Firestore] Persistencia no disponible:', code, err);
+  // --- Firestore: persistencia offline (una sola vez) ---
+  if (!window.__FIRESTORE_PERSISTENCE_ENABLED__) {
+    window.__FIRESTORE_PERSISTENCE_ENABLED__ = true;
+    (async () => {
+      try {
+        await firebase.firestore().enablePersistence({ synchronizeTabs: true });
+        console.log('[Firestore] Persistencia habilitada.');
+      } catch (err) {
+        const code = err && err.code;
+        if (code === 'failed-precondition') {
+          // Otra pestaña/instancia ya posee la persistencia
+          console.warn('[Firestore] Persistencia: otra instancia tiene el lock.');
+        } else if (code === 'unimplemented') {
+          console.warn('[Firestore] Persistencia no soportada.');
+        } else {
+          console.warn('[Firestore] Persistencia no disponible:', code, err);
+        }
       }
-    }
-  })();
+    })();
+  }
 
   // --- Warm-up de caché (consultas + imágenes) ---
   async function warmFirestoreCache() {
@@ -161,3 +168,5 @@
   // --- Debug rápido en consola ---
   window.fb = { auth, db, storage };
 })();
+
+} // Cierre de if (!window.__FIREBASE_INITIALIZED__)

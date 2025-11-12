@@ -8,8 +8,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.2/umd/index.min.js"></script>
 
   <!-- Estilos -->
-  <link rel="stylesheet" href="style.css?v=65"/>
-  <link rel="stylesheet" href="webview.css?v=65"/>
+  <link rel="stylesheet" href="style.css?v=69"/>
+  <link rel="stylesheet" href="webview.css?v=69"/>
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.0/css/all.min.css">
 
@@ -100,14 +100,14 @@
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore-compat.js"></script>
 
   <!-- Config e Inicialización -->
-  <script src="firebase-config.js?v=65"></script>
-  <script src="initFirebase.js?v=65"></script>
-  <script src="offline-storage.js?v=65"></script>
-  <script src="ui.js?v=65"></script>
-  <script src="webview.js?v=65"></script>
+  <script src="firebase-config.js?v=69"></script>
+  <script src="initFirebase.js?v=69"></script>
+  <script src="offline-storage.js?v=69"></script>
+  <script src="ui.js?v=69"></script>
+  <script src="webview.js?v=69"></script>
 
-  <!-- Lógica Ronda -->
-  <script src="ronda.js?v=65"></script>
+  <!-- Lógica Ronda v2 (mejorada) -->
+  <script src="ronda-v2.js?v=69"></script>
 
   <!-- SW -->
   <script>
@@ -115,9 +115,11 @@
       navigator.serviceWorker.register('./sw.js').catch(()=>{});
     }
 
-    // Botón atrás
-    document.getElementById('btn-menu')?.addEventListener('click', () => {
-      window.history.back();
+    // Botón atrás - ir a menu.html
+    document.getElementById('btn-menu')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      location.href = 'menu.html';
     });
   </script>
 </body>

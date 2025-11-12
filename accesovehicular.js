@@ -1,4 +1,4 @@
-// accesovehicular.js (v65) - Ingreso Vehicular Simple
+// accesovehicular.js (v69) - Ingreso Vehicular Simple
 // Patrón idéntico a peatonal.js para consistencia
 document.addEventListener('DOMContentLoaded', () => {
   // Firebase ya debe estar inicializado por initFirebase.js

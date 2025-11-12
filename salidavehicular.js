@@ -1,4 +1,4 @@
-// salidavehicular.js (v65) - Salida Vehicular
+// salidavehicular.js (v69) - Salida Vehicular
 // Patrón idéntico a peatonal.js para consistencia
 document.addEventListener('DOMContentLoaded', () => {
   // Firebase ya debe estar inicializado por initFirebase.js
