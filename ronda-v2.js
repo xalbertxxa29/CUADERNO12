@@ -67,8 +67,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.log('[Ronda] Ronda recuperada:', rondaEnProgreso.nombre);
         
         // Verificar si ya pasó la tolerancia
-        const ahoraMs = new Date().getTime();
-        const inicioMs = new Date(rondaEnProgreso.horarioInicio).getTime();
+        const ahoraMs = Date.now();
+        // Convertir Firestore Timestamp a milisegundos
+        const inicioMs = rondaEnProgreso.horarioInicio.toMillis ? 
+          rondaEnProgreso.horarioInicio.toMillis() : 
+          new Date(rondaEnProgreso.horarioInicio).getTime();
         const elapsedMs = ahoraMs - inicioMs;
         
         const toleranciaMs = 
@@ -226,7 +229,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function iniciarRonda(ronda) {
     try {
       const sesionId = Date.now().toString();
-      const ahora = new Date();
+      const ahora = firebase.firestore.Timestamp.now();
 
       const puntosRondaArray = Array.isArray(ronda.puntosRonda)
         ? ronda.puntosRonda
@@ -252,7 +255,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         unidad: userCtx.unidad,
         usuario: userCtx.userId,
         usuarioEmail: currentUser.email,
-        horarioInicio: ahora.toISOString(),
+        horarioInicio: ahora,
         horarioTermino: null,
         estado: 'EN_PROGRESO',
         puntosRonda: puntosRondaArray,
@@ -772,7 +775,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         nombre: punto.nombre,
         qrEscaneado: true,
         codigoQR: codigoQR,
-        timestamp: new Date().toISOString(),
+        timestamp: firebase.firestore.Timestamp.now(),
         respuestas: respuestas,
         foto: fotoBase64
       };
@@ -795,7 +798,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         nombre: punto.nombre,
         qrEscaneado: true,
         codigoQR: codigoQR,
-        timestamp: new Date().toISOString(),
+        timestamp: firebase.firestore.Timestamp.now(),
         respuestas: {},
         foto: null
       };
@@ -821,7 +824,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       const ahora = Date.now();
       // Solo actualizar pantalla cada 500ms (en lugar de cada 1000ms)
       if (ahora - lastUpdateTime >= 500) {
-        const inicioMs = new Date(rondaEnProgreso.horarioInicio).getTime();
+        const inicioMs = rondaEnProgreso.horarioInicio.toMillis ? 
+          rondaEnProgreso.horarioInicio.toMillis() : 
+          new Date(rondaEnProgreso.horarioInicio).getTime();
         const elapsedMs = ahora - inicioMs;
 
         const horas = Math.floor(elapsedMs / 3600000);
@@ -863,10 +868,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       if (animFrameId) cancelAnimationFrame(animFrameId);
 
-      const ahora = new Date();
       await db.collection('RONDAS_COMPLETADAS').doc(rondaEnProgreso.id).update({
         estado: 'TERMINADA',
-        horarioTermino: ahora.toISOString()
+        horarioTermino: firebase.firestore.Timestamp.now()
       });
 
       mostrarResumen();
@@ -887,10 +891,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       if (animFrameId) cancelAnimationFrame(animFrameId);
 
-      const ahora = new Date();
       await db.collection('RONDAS_COMPLETADAS').doc(rondaEnProgreso.id).update({
         estado: 'TERMINADA',
-        horarioTermino: ahora.toISOString()
+        horarioTermino: firebase.firestore.Timestamp.now()
       });
 
       mostrarResumen();
