@@ -1,94 +1,99 @@
 // menu.js (v69) — Relevo funcional, cambio de sesión sin redirigir al login
 document.addEventListener("DOMContentLoaded", () => {
-  // Solo inicializar si aún no lo hemos hecho
-  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
-  
-  const auth = firebase.auth();
-  const db = firebase.firestore();
+  try {
+    // Solo inicializar si aún no lo hemos hecho
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    
+    const auth = firebase.auth();
+    const db = firebase.firestore();
 
-  const emailFromId = id => `${id}@liderman.com.pe`;
-  const sanitizeId = raw => raw.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+    const emailFromId = id => `${id}@liderman.com.pe`;
+    const sanitizeId = raw => raw.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
 
-  let secondaryApp = null;
-  const getSecondaryAuth = () => {
-    if (!secondaryApp)
-      secondaryApp = firebase.apps.find(a => a.name === "secondary") || firebase.initializeApp(firebaseConfig, "secondary");
-    return secondaryApp.auth();
-  };
+    let secondaryApp = null;
+    const getSecondaryAuth = () => {
+      if (!secondaryApp)
+        secondaryApp = firebase.apps.find(a => a.name === "secondary") || firebase.initializeApp(firebaseConfig, "secondary");
+      return secondaryApp.auth();
+    };
 
-  let usuarioSalienteData = null;
-  let relevoSignaturePad = null;
-  let clientesDataCU = {};
-  let switchingSession = false; // 👈 evita redirección al login durante el switch
+    let usuarioSalienteData = null;
+    let relevoSignaturePad = null;
+    let clientesDataCU = {};
+    let switchingSession = false; // 👈 evita redirección al login durante el switch
 
-  // === Auth principal ===
-  auth.onAuthStateChanged(async user => {
-    // Si estamos cambiando sesión, ignorar el user=null intermedio
-    if (!user) {
-      if (switchingSession) return;
-      window.location.href = "index.html";
-      return;
-    }
-    try {
-      const userId = user.email.split("@")[0];
-      const nameEl = $("#user-details");
-      const unitEl = $("#user-client-unit");
-      
-      // Intentar cargar de Firestore primero
+    // === Auth principal ===
+    auth.onAuthStateChanged(async user => {
+      // Si estamos cambiando sesión, ignorar el user=null intermedio
+      if (!user) {
+        if (switchingSession) return;
+        window.location.href = "index.html";
+        return;
+      }
       try {
-        const doc = await db.collection("USUARIOS").doc(userId).get();
-        if (doc.exists) {
-          usuarioSalienteData = { ...doc.data(), id: userId };
-          nameEl.textContent = `${usuarioSalienteData.NOMBRES} ${usuarioSalienteData.APELLIDOS}`;
-          unitEl.textContent = `${usuarioSalienteData.CLIENTE} - ${usuarioSalienteData.UNIDAD} - ${usuarioSalienteData.PUESTO || ''}`;
-          
-          // 💾 Guardar datos del usuario offline para acceso futuro sin internet
-          if (typeof offlineStorage !== 'undefined') {
-            await offlineStorage.setUserData({
-              email: user.email,
-              userId: userId,
-              nombres: usuarioSalienteData.NOMBRES,
-              apellidos: usuarioSalienteData.APELLIDOS,
-              cliente: usuarioSalienteData.CLIENTE,
-              unidad: usuarioSalienteData.UNIDAD,
-              puesto: usuarioSalienteData.PUESTO
-            }).catch(e => console.warn('Error guardando datos offline:', e));
+        const userId = user.email.split("@")[0];
+        const nameEl = $("#user-details");
+        const unitEl = $("#user-client-unit");
+        
+        // Intentar cargar de Firestore primero
+        try {
+          const doc = await db.collection("USUARIOS").doc(userId).get();
+          if (doc.exists) {
+            usuarioSalienteData = { ...doc.data(), id: userId };
+            nameEl.textContent = `${usuarioSalienteData.NOMBRES} ${usuarioSalienteData.APELLIDOS}`;
+            unitEl.textContent = `${usuarioSalienteData.CLIENTE} - ${usuarioSalienteData.UNIDAD} - ${usuarioSalienteData.PUESTO || ''}`;
+            
+            // 💾 Guardar datos del usuario offline para acceso futuro sin internet
+            if (typeof offlineStorage !== 'undefined') {
+              await offlineStorage.setUserData({
+                email: user.email,
+                userId: userId,
+                nombres: usuarioSalienteData.NOMBRES,
+                apellidos: usuarioSalienteData.APELLIDOS,
+                cliente: usuarioSalienteData.CLIENTE,
+                unidad: usuarioSalienteData.UNIDAD,
+                puesto: usuarioSalienteData.PUESTO
+              }).catch(e => console.warn('Error guardando datos offline:', e));
+            }
+            console.log('✓ Usuario cargado desde Firestore:', userId);
+            return;
           }
-          console.log('✓ Usuario cargado desde Firestore:', userId);
-          return;
+        } catch (firebaseError) {
+          console.warn('No se pudo cargar de Firestore (probablemente sin internet):', firebaseError?.message);
         }
-      } catch (firebaseError) {
-        console.warn('No se pudo cargar de Firestore (probablemente sin internet):', firebaseError?.message);
-      }
-      
-      // FALLBACK: Cargar del almacenamiento offline
-      if (typeof offlineStorage !== 'undefined') {
-        const cachedUser = await offlineStorage.getUserData();
-        if (cachedUser && cachedUser.userId === userId) {
-          // El usuario en cache coincide con el actual
-          usuarioSalienteData = cachedUser;
-          nameEl.textContent = `${cachedUser.nombres} ${cachedUser.apellidos}`;
-          unitEl.textContent = `${cachedUser.cliente} - ${cachedUser.unidad} - ${cachedUser.puesto || ''}`;
-          console.log('✓ Usuario cargado desde cache offline:', userId);
-          return;
-        } else if (cachedUser) {
-          // El usuario en cache es diferente (relevo hecho)
-          console.log('Usuario en cache es diferente (relevo). Limpiando...');
-          await offlineStorage.clearAll();
-          nameEl.textContent = user.email;
-          unitEl.textContent = '';
-          return;
+        
+        // FALLBACK: Cargar del almacenamiento offline
+        if (typeof offlineStorage !== 'undefined') {
+          try {
+            const cachedUser = await offlineStorage.getUserData();
+            if (cachedUser && cachedUser.userId === userId) {
+              // El usuario en cache coincide con el actual
+              usuarioSalienteData = cachedUser;
+              nameEl.textContent = `${cachedUser.nombres} ${cachedUser.apellidos}`;
+              unitEl.textContent = `${cachedUser.cliente} - ${cachedUser.unidad} - ${cachedUser.puesto || ''}`;
+              console.log('✓ Usuario cargado desde cache offline:', userId);
+              return;
+            } else if (cachedUser) {
+              // El usuario en cache es diferente (relevo hecho)
+              console.log('Usuario en cache es diferente (relevo). Limpiando...');
+              await offlineStorage.clearAll();
+              nameEl.textContent = user.email;
+              unitEl.textContent = '';
+              return;
+            }
+          } catch (cacheError) {
+            console.warn('Error al acceder al cache offline:', cacheError?.message);
+          }
         }
+        
+        // Si no hay cache ni conexión, usar email como nombre
+        nameEl.textContent = user.email;
+        unitEl.textContent = '';
+        console.log('No hay datos de usuario disponibles');
+      } catch (err) { 
+        console.error("Error en auth callback:", err); 
       }
-      
-      // Si no hay cache ni conexión, usar email como nombre
-      nameEl.textContent = user.email;
-      unitEl.textContent = '';
-      console.log('No hay datos de usuario disponibles');
-    } catch (err) { 
-      console.error("Error en auth callback:", err); 
-    }
-  });
+    });
 
   // === Selectores ===
   const logoutBtn = $("#logout-btn"),
@@ -377,4 +382,8 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener('offline', () => {
     console.log('🔌 Evento "offline" detectado en menu.js');
   });
+
+  } catch (err) {
+    console.error('Error fatal en menu.js:', err);
+  }
 });

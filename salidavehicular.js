@@ -235,6 +235,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Botón Atrás
   document.getElementById('btn-atras')?.addEventListener('click', () => {
-    window.history.back();
+    window.location.href = 'menu.html';
   });
 });
