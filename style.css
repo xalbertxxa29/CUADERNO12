@@ -327,7 +327,7 @@ html[data-theme="dark"] .menu-button-improved:hover{
 }
 .menu-button-improved i{ 
   color: var(--primary); 
-  font-size:1.5rem; 
+  font-size:2rem; 
   width:100%; 
   text-align:center; 
 }
@@ -361,7 +361,7 @@ html[data-theme="dark"] .menu-button-improved:hover{
     padding: 0.5rem 0.3rem;
   }
   .menu-button-improved i {
-    font-size: 1.3rem;
+    font-size: 1.6rem;
   }
   .menu-button-improved span {
     font-size: 0.65rem;
