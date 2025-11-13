@@ -202,16 +202,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Guardar salida
   async function guardarSalida(docId) {
     const comentario = document.getElementById('comentario-salida').value.trim();
-    
-    const ahora = new Date();
-    const fechaSalida = ahora.toISOString();
 
     if (UI?.showOverlay) UI.showOverlay('Registrando salida...');
 
     try {
       await db.collection('ACCESO_VEHICULAR').doc(docId).update({
         estado: 'salida',
-        fechaSalida: fechaSalida,
+        fechaSalida: firebase.firestore.FieldValue.serverTimestamp(),
         comentarioSalida: comentario,
         // v73: Guardar nombre completo del usuario de salida
         usuarioSalida: userCtx.nombreCompleto,

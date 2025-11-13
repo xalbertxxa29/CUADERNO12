@@ -240,7 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
         usuarioID: currentUser.uid,
         usuarioEmail: currentUser.email,
         estado: 'ingreso',
-        fechaIngreso: new Date().toISOString(),
+        fechaIngreso: firebase.firestore.FieldValue.serverTimestamp(),
         timestamp: Date.now()
       };
 
