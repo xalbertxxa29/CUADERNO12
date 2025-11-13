@@ -4,6 +4,9 @@
   const auth = firebase.auth();
   const db   = firebase.firestore();
 
+  // 🆕 Guardar referencia global a db para control de tiempos
+  window.firestoreDb = db;
+
   auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
 
   const UX = {
@@ -30,6 +33,101 @@
 
   tabLogin?.addEventListener('click',   () => showTab('login'));
   tabRegister?.addEventListener('click',() => showTab('register'));
+
+  /* ============ CONTROL DE TIEMPOS: Registro Invisible de Conexiones ============ */
+  
+  // Almacenar ID de registro de control actual
+  window.currentControlTimerId = null;
+
+  // Iniciar control de tiempo - VERSIÓN SIMPLIFICADA (sin leer USUARIOS)
+  window.iniciarControlTiempo = async function(userId, razonInicio = 'LOGIN') {
+    try {
+      console.log(`[control-tiempos] ⏳ Iniciando control para ${userId}... Razón: ${razonInicio}`);
+      
+      let db_ref = window.firestoreDb;
+      if (!db_ref) {
+        console.warn('[control-tiempos] ⚠️ window.firestoreDb no disponible, usando db global');
+        db_ref = db;
+      }
+      
+      if (!db_ref) {
+        console.error('[control-tiempos] ❌ NO hay DB disponible');
+        return null;
+      }
+
+      // VERIFICAR si ya existe un registro ACTIVO para este usuario
+      console.log(`[control-tiempos] 🔍 Buscando registro ACTIVO existente para ${userId}...`);
+      const querySnapshot = await db_ref.collection('CONTROL_TIEMPOS_USUARIOS')
+        .where('usuarioID', '==', userId)
+        .where('estado', '==', 'ACTIVO')
+        .limit(1)
+        .get();
+
+      if (!querySnapshot.empty) {
+        // YA EXISTE UN REGISTRO ACTIVO
+        const docExistente = querySnapshot.docs[0];
+        console.log(`[control-tiempos] ⚠️ Ya existe registro ACTIVO: ${docExistente.id}`);
+        console.log('[control-tiempos] ℹ️ Reutilizando registro existente...');
+        window.currentControlTimerId = docExistente.id;
+        return docExistente.id;
+      }
+
+      // NO EXISTE REGISTRO ACTIVO - CREAR UNO NUEVO
+      console.log(`[control-tiempos] ✨ Creando nuevo registro...`);
+      const nuevoRegistro = {
+        usuarioID: userId,
+        horaInicio: firebase.firestore.FieldValue.serverTimestamp(),
+        horaCierre: null,
+        duracionSegundos: null,
+        razon: razonInicio,
+        estado: 'ACTIVO'
+      };
+
+      console.log(`[control-tiempos] 📋 Datos a guardar:`, JSON.stringify(nuevoRegistro, null, 2));
+      console.log(`[control-tiempos] 💾 Escribiendo a CONTROL_TIEMPOS_USUARIOS...`);
+      
+      const colRef = db_ref.collection('CONTROL_TIEMPOS_USUARIOS');
+      const docRef = await colRef.add(nuevoRegistro);
+      console.log(`[control-tiempos] ✅ GUARDADO - ID: ${docRef.id}`);
+      
+      window.currentControlTimerId = docRef.id;
+      return docRef.id;
+    } catch (error) {
+      console.error('[control-tiempos] ❌ ERROR:', error.message);
+      console.error('[control-tiempos] 📍 Stack:', error.stack);
+      return null;
+    }
+  };
+  console.log('[auth] 🟢 iniciarControlTiempo registrada');
+
+  // Finalizar control de tiempo - VERSIÓN SIMPLIFICADA
+  window.finalizarControlTiempo = async function(userId, razonCierre = 'LOGOUT') {
+    try {
+      console.log(`[control-tiempos] ⏳ Finalizando... Razón: ${razonCierre}`);
+      
+      const db = window.firestoreDb;
+      
+      if (!window.currentControlTimerId) {
+        console.log('[control-tiempos] ⚠️ No hay ID de control');
+        return;
+      }
+
+      console.log(`[control-tiempos] 💾 Actualizando ID: ${window.currentControlTimerId}`);
+      
+      const updateData = {
+        horaCierre: firebase.firestore.FieldValue.serverTimestamp(),
+        razon: razonCierre,
+        estado: 'CERRADO'
+      };
+      
+      await db.collection('CONTROL_TIEMPOS_USUARIOS').doc(window.currentControlTimerId).update(updateData);
+
+      console.log(`[control-tiempos] ✅ CERRADO`);
+      window.currentControlTimerId = null;
+    } catch (error) {
+      console.error('[control-tiempos] ❌ ERROR:', error.message);
+    }
+  };
 
   /* ============ SELECTS de Registro ============ */
   const selCliente = $('reg-cliente');
@@ -179,8 +277,43 @@
     }
   }
 
-  selCliente?.addEventListener('change', (e) => loadUnidades(e.target.value));
-  selUnidad?.addEventListener('change', (e) => loadPuestos(selCliente.value, e.target.value));
+  selCliente?.addEventListener('change', (e) => {
+    loadUnidades(e.target.value);
+    actualizarEstadoBotonRegistro();
+  });
+  selUnidad?.addEventListener('change', (e) => {
+    loadPuestos(selCliente.value, e.target.value);
+    actualizarEstadoBotonRegistro();
+  });
+
+  /* ============ Validación en Tiempo Real del Formulario ============ */
+  function actualizarEstadoBotonRegistro() {
+    const registerBtn = $('register-btn');
+    if (!registerBtn) return;
+
+    const validacion = validarFormularioRegistro();
+    registerBtn.disabled = validacion.error;
+
+    // Agregar visual feedback
+    if (validacion.error) {
+      registerBtn.style.opacity = '0.5';
+      registerBtn.title = validacion.mensaje;
+      registerBtn.style.cursor = 'not-allowed';
+    } else {
+      registerBtn.style.opacity = '1';
+      registerBtn.title = 'Haz clic para registrar';
+      registerBtn.style.cursor = 'pointer';
+    }
+  }
+
+  // Escuchar cambios en campos de texto
+  ['reg-id', 'reg-nombres', 'reg-apellidos', 'reg-pass1', 'reg-pass2'].forEach(id => {
+    $(id)?.addEventListener('input', actualizarEstadoBotonRegistro);
+    $(id)?.addEventListener('change', actualizarEstadoBotonRegistro);
+  });
+
+  // Validación inicial
+  actualizarEstadoBotonRegistro();
 
   /* ============ Modales “+” ============ */
   const open  = (el) => el && (el.style.display = 'flex');
@@ -289,8 +422,13 @@
     const email = user.includes('@') ? user : `${user}@liderman.com.pe`;
     try {
       UX.show('Ingresando…');
+      console.log('[auth] 🔵 Login iniciado:', email);
       await auth.signInWithEmailAndPassword(email, pass);
-      UX.hide(); location.href = 'menu.html';
+      console.log('[auth] ✅ Login exitoso');
+      
+      // El control de tiempo se inicia en menu.js onAuthStateChanged
+      UX.hide(); 
+      location.href = 'menu.html';
     } catch (err) {
       console.error(err); UX.hide();
       const msg =
@@ -302,71 +440,212 @@
     }
   });
 
-  /* ============ Registro ============ */
-  $('register-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
+  /* ============ Guardar Usuario en Firestore (con reintentos) ============ */
+  async function guardarUsuarioEnFirestore(userId, datosUsuario) {
+    const maxIntentos = 3;
+    let ultimoError = null;
 
+    for (let intento = 1; intento <= maxIntentos; intento++) {
+      try {
+        console.log(`[auth] Intento ${intento}/${maxIntentos} guardando usuario en Firestore...`);
+        
+        await db.collection('USUARIOS').doc(userId).set(datosUsuario, { merge: true });
+        
+        console.log(`[auth] ✅ Usuario guardado exitosamente en USUARIOS/${userId}`);
+        console.log('[auth] Datos guardados:', datosUsuario);
+        return true;
+        
+      } catch (error) {
+        ultimoError = error;
+        console.error(`[auth] ❌ Intento ${intento} falló:`, {
+          code: error.code,
+          message: error.message,
+          details: error
+        });
+
+        // Si hay más intentos, esperar antes de reintentar
+        if (intento < maxIntentos) {
+          const espera = 1000 * intento;  // 1s, 2s, 3s
+          console.log(`[auth] Esperando ${espera}ms antes de reintentar...`);
+          await new Promise(resolve => setTimeout(resolve, espera));
+        }
+      }
+    }
+
+    // Si llegamos aquí, todos los intentos fallaron
+    throw new Error(
+      `No se pudo guardar usuario en Firestore después de ${maxIntentos} intentos. ` +
+      `Último error: ${ultimoError?.code || 'UNKNOWN'} - ${ultimoError?.message || 'Sin detalles'}`
+    );
+  }
+
+  /* ============ Validar Formulario Registro ============ */
+  function validarFormularioRegistro() {
     const id   = String(($('reg-id')?.value||'')).trim();
     const nom  = String(($('reg-nombres')?.value||'')).trim();
     const ape  = String(($('reg-apellidos')?.value||'')).trim();
     const cli  = String(selCliente?.value||'').trim();
     const uni  = String(selUnidad?.value||'').trim();
     const pue  = String(selPuesto?.value||'').trim();
-    const tipo = String(($('reg-tipo')?.value||'AGENTE')).trim().toUpperCase();
     const p1   = String(($('reg-pass1')?.value||'')); 
     const p2   = String(($('reg-pass2')?.value||''));
 
-    if (!id || !nom || !ape || !cli || !uni || !pue || !p1 || !p2) return UX.alert('Aviso','Completa todos los campos.');
-    if (p1 !== p2)  return UX.alert('Aviso','Las contraseñas no coinciden.');
-    if (p1.length < 6) return UX.alert('Aviso','La contraseña debe tener al menos 6 caracteres.');
+    // Validar campo por campo con mensajes específicos
+    if (!id) return { error: true, mensaje: 'Ingresa tu ID o Usuario.' };
+    if (!nom) return { error: true, mensaje: 'Ingresa tu Nombre.' };
+    if (!ape) return { error: true, mensaje: 'Ingresa tu Apellido.' };
+    
+    if (!cli) return { error: true, mensaje: '❌ CLIENTE: Selecciona uno de la lista.' };
+    if (!uni || selUnidad?.disabled) return { error: true, mensaje: '❌ UNIDAD: Selecciona una. (Si no ves opciones, crea una con el botón +)' };
+    if (!pue || selPuesto?.disabled) return { error: true, mensaje: '❌ PUESTO: Selecciona uno. (Si no ves opciones, crea uno con el botón +)' };
+    
+    if (!p1) return { error: true, mensaje: 'Ingresa una Contraseña (mín. 6 caracteres).' };
+    if (!p2) return { error: true, mensaje: 'Repite la Contraseña.' };
+    if (p1.length < 6) return { error: true, mensaje: 'La Contraseña debe tener AL MENOS 6 caracteres.' };
+    if (p1 !== p2) return { error: true, mensaje: 'Las Contraseñas NO COINCIDEN.' };
+
+    // Todo OK
+    return { error: false, datos: { id, nom, ape, cli, uni, pue, p1, p2 } };
+  }
+
+  /* ============ Registro ============ */
+  $('register-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    // Validar formulario
+    const validacion = validarFormularioRegistro();
+    if (validacion.error) {
+      return UX.alert('❌ Registro Incompleto', validacion.mensaje);
+    }
+
+    const { id, nom, ape, cli, uni, pue, p1 } = validacion.datos;
+    const tipo = 'AGENTE';
+    const email = `${id}@liderman.com.pe`;
 
     try {
-      UX.show('Creando cuenta…');
-      // El email siempre es con dominio @liderman.com.pe
-      const email = `${id}@liderman.com.pe`;
+      UX.show('Creando usuario...');
+      console.log('[auth] ===== REGISTRO NUEVO ORDEN: FIRESTORE PRIMERO =====');
+
+      // ==========================================
+      // PASO 1: CREAR DOCUMENTO EN FIRESTORE PRIMERO
+      // ==========================================
+      console.log(`[auth] Paso 1: Guardando ${id} en Firestore USUARIOS...`);
+      UX.show('Guardando datos en Firestore...');
       
-      // Crear usuario en Firebase Auth
-      await auth.createUserWithEmailAndPassword(email, p1);
+      await guardarUsuarioEnFirestore(id, {
+        ID: id,
+        NOMBRES: nom.toUpperCase(),
+        APELLIDOS: ape.toUpperCase(),
+        CLIENTE: cli.toUpperCase(),
+        UNIDAD: uni.toUpperCase(),
+        PUESTO: pue.toUpperCase(),
+        TIPO: tipo,
+        ESTADO: 'ACTIVO',
+        EMAIL: email,
+        creadoEn: firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      console.log(`[auth] ✅ PASO 1 EXITOSO: Documento creado en USUARIOS/${id}`);
+      console.log('[auth] Datos en Firestore:', { ID: id, NOMBRES: nom, CLIENTE: cli, UNIDAD: uni, PUESTO: pue });
+
+      // ==========================================
+      // PASO 2: CREAR USUARIO EN FIREBASE AUTH
+      // ==========================================
+      console.log(`[auth] Paso 2: Creando autenticación en Firebase Auth...`);
+      UX.show('Configurando autenticación...');
       
-      // Guardar información en colección USUARIOS
-      // El ID del documento es SOLO el ID sin dominio
       try {
-        await db.collection('USUARIOS').doc(id).set({
-          ID: id,
-          NOMBRES: nom.toUpperCase(),
-          APELLIDOS: ape.toUpperCase(),
-          CLIENTE: cli.toUpperCase(),
-          UNIDAD: uni.toUpperCase(),
-          PUESTO: pue.toUpperCase(),
-          TIPO: tipo || 'AGENTE',
-          ESTADO: 'ACTIVO',
-          EMAIL: email,
-          creadoEn: firebase.firestore.FieldValue.serverTimestamp()
-        });
-        console.log('[auth] Usuario guardado en USUARIOS/', id, ':', {ID: id, NOMBRES: nom, APELLIDOS: ape, CLIENTE: cli, UNIDAD: uni, PUESTO: pue});
-      } catch (e) {
-        console.error('[auth] Error guardando usuario en Firestore:', e);
-        // Continuar con redirección aunque falle Firestore (auth ya existe)
+        await auth.createUserWithEmailAndPassword(email, p1);
+        console.log(`[auth] ✅ PASO 2 EXITOSO: Usuario creado en Firebase Auth`);
+        console.log(`[auth] Email: ${email}`);
+
+        // ✅ TODO ÉXITO
+        console.log('[auth] ✅✅✅ REGISTRO COMPLETADO EXITOSAMENTE ✅✅✅');
+        console.log('[auth] Usuario disponible en: USUARIOS/' + id);
+        console.log('[auth] Autenticación: ' + email);
+        
+        UX.hide();
+        UX.alert(
+          '✅ ¡Éxito!',
+          `Usuario ${id} creado correctamente\n\nEmail: ${email}\n\nRedirigiendo al dashboard...`,
+          () => {
+            setTimeout(() => { location.href = 'menu.html'; }, 500);
+          }
+        );
+
+      } catch (authErr) {
+        // ❌ Firebase Auth falló, PERO datos YA están en Firestore
+        console.error(`[auth] ❌ PASO 2 FALLÓ: Error en Firebase Auth`, authErr.code, authErr.message);
+        console.error(`[auth] ⚠️  IMPORTANTE: Datos YA están guardados en Firestore (USUARIOS/${id})`);
+        console.error(`[auth] ⚠️  Solo falló la autenticación`);
+
+        UX.hide();
+
+        let mensajeAuth = 'Error en autenticación.';
+        if (authErr?.code === 'auth/email-already-in-use') {
+          mensajeAuth = '⚠️ Ese email ya tiene cuenta.\n\n¡PERO tus datos SÍ se guardaron en el sistema!\n\nIntenta loguear.';
+        } else if (authErr?.code === 'auth/weak-password') {
+          mensajeAuth = '⚠️ Contraseña muy débil.\n\n¡PERO tus datos SÍ se guardaron!\n\nIntenta de nuevo con contraseña más fuerte.';
+        } else if (authErr?.code === 'auth/invalid-email') {
+          mensajeAuth = '⚠️ Email inválido.\n\n¡PERO tus datos SÍ se guardaron!\n\nContacta admin.';
+        } else {
+          mensajeAuth = `⚠️ ${authErr.message || 'Error desconocido'}\n\n¡PERO tus datos SÍ se guardaron en el sistema!`;
+        }
+
+        UX.alert('⚠️ Problema de Autenticación', mensajeAuth + '\n\nContacta al administrador para completar el registro.');
       }
 
+    } catch (fsErr) {
+      // ❌ Firestore falló = Error fatal
+      console.error(`[auth] ❌❌ ERROR CRÍTICO EN FIRESTORE ❌❌`, fsErr.code, fsErr.message);
+      console.error(`[auth] Detalles:`, fsErr);
+
       UX.hide();
-      UX.alert('Éxito','Cuenta creada correctamente. Redirigiendo...', () => {
-        // Esperar a que localStorage se actualice antes de redirigir
-        setTimeout(() => { 
-          location.href='menu.html'; 
-        }, 500);
-      });
-    } catch (err) {
-      console.error(err); UX.hide();
-      const msg =
-        err?.code === 'auth/email-already-in-use' ? 'Ese ID ya existe.' :
-        err?.code === 'auth/weak-password'       ? 'Contraseña muy débil.' :
-        err?.message || 'No se pudo completar el registro.';
-      UX.alert('Registro', msg);
+
+      let mensajeFS = 'No se pudieron guardar tus datos en el sistema.';
+      
+      if (fsErr?.message?.includes('permission-denied')) {
+        mensajeFS = '❌ Permiso denegado.\n\nNo tienes permisos para crear cuenta.\n\nContacta al administrador.';
+      } else if (fsErr?.message?.includes('No se pudo guardar usuario')) {
+        mensajeFS = `❌ ${fsErr.message}`;
+      } else {
+        mensajeFS = `❌ Error: ${fsErr.message || 'Desconocido'}`;
+      }
+
+      UX.alert('❌ Error Crítico', mensajeFS);
     }
   });
 
+  /* ============ HELPER: Obtener Nombre Completo del Usuario ============ */
+  window.obtenerNombreCompletoUsuario = async function() {
+    try {
+      const userId = auth.currentUser?.uid;
+      if (!userId) {
+        console.log('[auth] No hay usuario autenticado');
+        return 'USUARIO DESCONOCIDO';
+      }
+      
+      const docUsuario = await db.collection('USUARIOS').doc(userId).get();
+      if (docUsuario.exists) {
+        const { NOMBRES = '', APELLIDOS = '' } = docUsuario.data();
+        const nombreCompleto = `${NOMBRES} ${APELLIDOS}`.trim().toUpperCase();
+        console.log(`[auth] Nombre completo obtenido: ${nombreCompleto}`);
+        return nombreCompleto;
+      }
+      
+      console.log('[auth] Documento USUARIOS no existe, usando ID');
+      return userId; // Fallback al ID
+    } catch (error) {
+      console.error('[auth] Error obteniendo nombre completo:', error);
+      return auth.currentUser?.uid || 'ERROR';
+    }
+  };
+
   /* ============ Inicio ============ */
+  console.log('[auth] 🟢 auth.js IIFE ejecutándose...');
+  console.log('[auth] 🟢 window.firestoreDb disponible:', !!window.firestoreDb);
+  console.log('[auth] 🟢 window.iniciarControlTiempo disponible:', typeof window.iniciarControlTiempo);
+  
   loadClientes().catch(console.error);
 
   // Por defecto, mostrar "Iniciar Sesión".
@@ -376,4 +655,6 @@
   } else {
     showTab('login');
   }
+  
+  console.log('[auth] 🟢 auth.js IIFE COMPLETADO - Control de tiempos listo');
 })();

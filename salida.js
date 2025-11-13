@@ -10,7 +10,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const iframe = $('#detalle-iframe');
 
   // Redirige a login si no hay sesión
-  auth.onAuthStateChanged(user => { if (!user) window.location.href = 'index.html'; });
+  let currentUser = null;
+  auth.onAuthStateChanged(user => { 
+    if (!user) window.location.href = 'index.html';
+    currentUser = user; // v73: Guardar usuario actual
+  });
 
   // Util para fechas/horas
   const pad = n => String(n).padStart(2, '0');
@@ -156,11 +160,26 @@ document.addEventListener('DOMContentLoaded', () => {
         const d = snap.data() || {};
         const estadia = diffHHMM(d.FECHA_INGRESO || fecha, d.HORA_INGRESO || hora, fecha, hora);
 
+        // v73: Obtener nombre completo del usuario que registra salida
+        let usuarioSalida = currentUser?.email || 'DESCONOCIDO';
+        try {
+          const userId = currentUser?.email.split('@')[0];
+          const userSnap = await db.collection('USUARIOS').doc(userId).get();
+          if (userSnap.exists) {
+            const userData = userSnap.data();
+            usuarioSalida = `${userData.NOMBRES || ''} ${userData.APELLIDOS || ''}`.trim().toUpperCase();
+          }
+        } catch (e) {
+          console.warn('No se pudo obtener nombre del usuario:', e);
+        }
+
         await ref.set({
           ESTADO: 'CERRADO',
           FECHA_SALIDA: fecha,
           HORA_FIN: hora,
           ESTADIA: estadia,
+          // v73: Guardar usuario que registra salida
+          USUARIO_SALIDA: usuarioSalida,
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
 

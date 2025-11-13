@@ -32,6 +32,17 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       try {
         const userId = user.email.split("@")[0];
+        console.log('[menu] 👤 Usuario autenticado:', userId);
+        
+        // ⏱️ INICIAR CONTROL DE TIEMPO AL CARGAR menu.html
+        if (window.iniciarControlTiempo) {
+          console.log('[menu] ⏳ Iniciando control de tiempo...');
+          await window.iniciarControlTiempo(userId, 'LOGIN');
+          console.log('[menu] ✅ Control iniciado');
+        } else {
+          console.warn('[menu] ⚠️ iniciarControlTiempo no disponible');
+        }
+        
         const nameEl = $("#user-details");
         const unitEl = $("#user-client-unit");
         
@@ -134,9 +145,22 @@ document.addEventListener("DOMContentLoaded", () => {
   function $(s) { return document.querySelector(s); }
 
   // === Logout ===
-  logoutBtn.addEventListener("click", e => {
+  logoutBtn.addEventListener("click", async e => {
     e.preventDefault();
-    auth.signOut().then(() => (window.location.href = "index.html"));
+    console.log('[menu] 🔴 Logout iniciado');
+    try {
+      if (window.finalizarControlTiempo && auth.currentUser) {
+        console.log('[menu] ⏹️ Finalizando control');
+        await window.finalizarControlTiempo(auth.currentUser.email.split('@')[0], 'LOGOUT');
+        console.log('[menu] ✅ Control cerrado');
+      }
+      console.log('[menu] 🚪 Sign out');
+      await auth.signOut();
+      window.location.href = "index.html";
+    } catch (error) {
+      console.error('[menu] ❌ Error:', error);
+      auth.signOut().then(() => (window.location.href = "index.html"));
+    }
   });
 
   // === Ingresar / Ver ===
@@ -196,9 +220,24 @@ document.addEventListener("DOMContentLoaded", () => {
         unidad:  usuarioSalienteData.UNIDAD,
         comentario,
         timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-        usuarioSaliente: { id: usuarioSalienteData.id },
-        usuarioEntrante: { id }
+        // v73: Guardar nombre completo de usuario saliente y entrante
+        usuarioSaliente: { 
+          id: usuarioSalienteData.id,
+          nombre: `${usuarioSalienteData.NOMBRES} ${usuarioSalienteData.APELLIDOS}`.trim().toUpperCase()
+        },
+        usuarioEntrante: { 
+          id,
+          nombre: `${u.NOMBRES} ${u.APELLIDOS}`.trim().toUpperCase()
+        }
       });
+
+      // Finalizar control del saliente
+      const usuarioActualEmail = auth.currentUser?.email;
+      if (window.finalizarControlTiempo && usuarioActualEmail) {
+        console.log(`[menu-relevo] ⏹️ Finalizando ${usuarioActualEmail.split('@')[0]}`);
+        await window.finalizarControlTiempo(usuarioActualEmail.split('@')[0], 'RELEVO');
+        console.log(`[menu-relevo] ✅ Saliente cerrado`);
+      }
 
       // Validar credenciales del entrante con auth secundaria (no rompe la sesión actual)
       const sec = getSecondaryAuth();
@@ -210,11 +249,13 @@ document.addEventListener("DOMContentLoaded", () => {
       await auth.signInWithEmailAndPassword(emailFromId(id), pass);
 
       // Esperar a que onAuthStateChanged tenga al nuevo usuario
+      // El onAuthStateChanged automáticamente iniciará el control para el nuevo usuario
       await new Promise((resolve) => {
         const unsub = auth.onAuthStateChanged(u2 => {
           if (u2 && u2.email === emailFromId(id)) { unsub(); resolve(); }
         });
       });
+      
       switchingSession = false;
 
       UI.hideOverlay();

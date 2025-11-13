@@ -128,8 +128,9 @@ document.addEventListener('DOMContentLoaded', () => {
   function cardRelevoHTML(data) {
     const fechaTxt = toDateTimeText(data.timestamp);
     const comentario = (data.comentario || '').replace(/\n/g, '<br>');
-    const sal = data.usuarioSaliente?.nombre || '';
-    const ent = data.usuarioEntrante?.nombre || '';
+    // v73: Mostrar nombre completo (en el objeto nombre) o fallback al id
+    const sal = data.usuarioSaliente?.nombre || data.usuarioSaliente?.id || '';
+    const ent = data.usuarioEntrante?.nombre || data.usuarioEntrante?.id || '';
     const quien = resolveRegistradoPor(data);
     const fotoHTML = onlyPhotoHTML(data);
     return `

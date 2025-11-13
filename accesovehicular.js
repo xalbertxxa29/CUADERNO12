@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentUser = null;
 
   // Estado de sesión
-  let userCtx = { email: '', uid: '', cliente: '', unidad: '', puesto: '' };
+  let userCtx = { email: '', uid: '', cliente: '', unidad: '', puesto: '', nombreCompleto: '' };
 
   // Obtener usuario autenticado y sus datos
   auth.onAuthStateChanged(async (user) => {
@@ -55,6 +55,8 @@ document.addEventListener('DOMContentLoaded', () => {
         userCtx.cliente = datos.CLIENTE || datos.cliente || '';
         userCtx.unidad = datos.UNIDAD || datos.unidad || '';
         userCtx.puesto = datos.PUESTO || datos.puesto || '';
+        // v73: Guardar nombre completo
+        userCtx.nombreCompleto = `${datos.NOMBRES || ''} ${datos.APELLIDOS || ''}`.trim().toUpperCase();
         
         console.log('✓ Datos del usuario obtenidos de Firestore', userCtx);
         
@@ -233,10 +235,10 @@ document.addEventListener('DOMContentLoaded', () => {
         cliente: userCtx.cliente,
         unidad: userCtx.unidad,
         puesto: userCtx.puesto,
-        usuario: {
-          email: currentUser.email,
-          uid: currentUser.uid
-        },
+        // v73: Guardar nombre completo del usuario
+        usuario: userCtx.nombreCompleto,
+        usuarioID: currentUser.uid,
+        usuarioEmail: currentUser.email,
         estado: 'ingreso',
         fechaIngreso: new Date().toISOString(),
         timestamp: Date.now()

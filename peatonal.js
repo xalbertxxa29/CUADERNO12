@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const docHelp = $('#docHelp');
 
   // Estado de sesión → para tomar CLIENTE/UNIDAD/USUARIO
-  let userCtx = { id: '', cliente: '', unidad: '' };
+  let userCtx = { id: '', cliente: '', unidad: '', nombreCompleto: '' };
 
   auth.onAuthStateChanged(async (user) => {
     if (!user) { window.location.href = 'index.html'; return; }
@@ -25,9 +25,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const snap = await db.collection('USUARIOS').doc(id).get();
       if (snap.exists) {
         const d = snap.data();
-        userCtx = { id, cliente: d.CLIENTE || '', unidad: d.UNIDAD || '' };
+        userCtx = { 
+          id, 
+          cliente: d.CLIENTE || '', 
+          unidad: d.UNIDAD || '',
+          // v73: Guardar nombre completo
+          nombreCompleto: `${d.NOMBRES || ''} ${d.APELLIDOS || ''}`.trim().toUpperCase()
+        };
       } else {
-        userCtx = { id, cliente: '', unidad: '' };
+        userCtx = { id, cliente: '', unidad: '', nombreCompleto: id };
       }
     } catch (e) { console.error(e); }
   });
@@ -105,6 +111,8 @@ document.addEventListener('DOMContentLoaded', () => {
       CLIENTE: toUpperIfText(userCtx.cliente),
       UNIDAD: toUpperIfText(userCtx.unidad),
       USUARIO_ID: toUpperIfText(userCtx.id),
+      // v73: Guardar nombre completo del usuario que registra
+      USUARIO: userCtx.nombreCompleto,
 
       // extra por robustez: server timestamp
       createdAt: firebase.firestore.FieldValue.serverTimestamp()

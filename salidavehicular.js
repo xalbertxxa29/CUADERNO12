@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let vehiculosData = {}; // Almacenar datos para modal
 
   // Estado de sesión
-  let userCtx = { email: '', uid: '', cliente: '', unidad: '', puesto: '' };
+  let userCtx = { email: '', uid: '', cliente: '', unidad: '', puesto: '', nombreCompleto: '' };
 
   // Obtener usuario autenticado y sus datos
   auth.onAuthStateChanged(async (user) => {
@@ -51,6 +51,8 @@ document.addEventListener('DOMContentLoaded', () => {
         userCtx.cliente = datos.CLIENTE || datos.cliente || '';
         userCtx.unidad = datos.UNIDAD || datos.unidad || '';
         userCtx.puesto = datos.PUESTO || datos.puesto || '';
+        // v73: Guardar nombre completo
+        userCtx.nombreCompleto = `${datos.NOMBRES || ''} ${datos.APELLIDOS || ''}`.trim().toUpperCase();
         
         console.log('✓ Datos del usuario obtenidos de Firestore', userCtx);
         
@@ -211,7 +213,9 @@ document.addEventListener('DOMContentLoaded', () => {
         estado: 'salida',
         fechaSalida: fechaSalida,
         comentarioSalida: comentario,
-        usuarioSalida: currentUser.email,
+        // v73: Guardar nombre completo del usuario de salida
+        usuarioSalida: userCtx.nombreCompleto,
+        usuarioSalidaEmail: currentUser.email,
         usuarioSalidaUid: currentUser.uid
       });
 
