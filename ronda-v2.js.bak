@@ -1,14 +1,11 @@
 // ronda-v2.js - Sistema mejorado de rondas con persistencia y QR
 // Características:
-// - Usa RONDAS_COMPLETADAS con estado EN_PROGRESO/TERMINADA/INCOMPLETA/NO_REALIZADA
+// - Usa RONDAS_COMPLETADAS con estado EN_PROGRESO/TERMINADA
 // - Registra si el QR fue escaneado en cada punto
 // - Guarda usuario que inició la ronda
 // - Recupera ronda al recargar navegador
 // - Cronómetro basado en horarioInicio (tiempo real)
 // - Auto-termina si pasa tolerancia
-// - NUEVO: Estados INCOMPLETA/NO_REALIZADA según escaneos
-// - NUEVO: Overlays para operaciones largas
-// - NUEVO: Scanner se reinicia después de cada escaneo
 
 document.addEventListener('DOMContentLoaded', async () => {
   if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
@@ -21,39 +18,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   let scannerActivo = false;
   let animFrameId = null;
   let lastUpdateTime = Date.now();
-  let codeReaderInstance = null;
-
-  // ===================== CREAR OVERLAY DE CARGA =====================
-  function mostrarOverlay(mensaje = 'Procesando...') {
-    const overlay = document.createElement('div');
-    overlay.id = 'loading-overlay';
-    overlay.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.8); display: flex; align-items: center;
-      justify-content: center; z-index: 5000;
-    `;
-    
-    overlay.innerHTML = `
-      <div style="text-align: center;">
-        <div style="width: 50px; height: 50px; border: 4px solid #444; border-top-color: #ef4444;
-          border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 15px;"></div>
-        <p style="color: white; font-size: 1.1em; margin: 0;">${mensaje}</p>
-      </div>
-      <style>
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      </style>
-    `;
-    
-    document.body.appendChild(overlay);
-    return overlay;
-  }
-
-  function ocultarOverlay() {
-    const overlay = document.getElementById('loading-overlay');
-    if (overlay) overlay.remove();
-  }
 
   // ===================== AUTH =====================
   auth.onAuthStateChanged(async (user) => {
@@ -263,8 +227,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // ===================== INICIAR RONDA =====================
   async function iniciarRonda(ronda) {
-    const overlay = mostrarOverlay('Iniciando ronda...');
-    
     try {
       const sesionId = Date.now().toString();
       const ahora = firebase.firestore.Timestamp.now();
@@ -280,8 +242,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           qrEscaneado: false,
           codigoQR: null,
           timestamp: null,
-          respuestas: {},
-          foto: null
+          respuestas: {}, // Guardar respuestas de preguntas
+          foto: null // Guardar foto en base64
         };
       });
 
@@ -305,12 +267,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       await db.collection('RONDAS_COMPLETADAS').doc(sesionId).set(rondaEnProgreso);
 
       console.log('[Ronda] Iniciada:', sesionId);
-      ocultarOverlay();
       mostrarRondaEnProgreso();
       iniciarCronometro();
     } catch (e) {
       console.error('[Ronda] Error iniciando:', e);
-      ocultarOverlay();
       alert('Error: ' + e.message);
     }
   }
@@ -338,7 +298,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           <button id="btn-terminar" style="
             background: #ef4444; color: white; border: none; padding: 8px 16px;
             border-radius: 4px; cursor: pointer; margin-top: 10px; width: 100%;
-            font-weight: 600;
           ">Terminar Ronda</button>
         </div>
       </div>
@@ -411,16 +370,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         <p style="margin: 10px 0 0 0; color: #ccc;">Apunta la cámara al código QR</p>
       </div>
       <video id="scanner-video" style="width: 80%; max-width: 500px; border: 2px solid #ef4444; border-radius: 8px;"></video>
-      <div style="display: flex; gap: 10px; margin-top: 20px;">
-        <button id="retry-scanner" style="
-          background: #3b82f6; color: white; border: none; padding: 10px 20px;
-          border-radius: 4px; cursor: pointer; font-weight: 600;
-        ">Reintentar</button>
-        <button id="close-scanner" style="
-          background: #666; color: white; border: none; padding: 10px 20px;
-          border-radius: 4px; cursor: pointer; font-weight: 600;
-        ">Cancelar</button>
-      </div>
+      <button id="close-scanner" style="
+        background: #666; color: white; border: none; padding: 10px 20px;
+        border-radius: 4px; cursor: pointer; margin-top: 20px;
+      ">Cerrar</button>
     `;
 
     document.body.appendChild(modal);
@@ -430,14 +383,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     modal.querySelector('#close-scanner').addEventListener('click', () => {
       detenerVideoQR(modal);
       scannerActivo = false;
-      if (modal && modal.parentNode) modal.remove();
-      mostrarRondaEnProgreso();
-    });
-
-    modal.querySelector('#retry-scanner').addEventListener('click', () => {
-      detenerVideoQR(modal);
-      const video = modal.querySelector('#scanner-video');
-      iniciarVideoQR(indice, punto, modal);
     });
   }
 
@@ -449,16 +394,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       video.srcObject = stream;
       video.play();
 
-      // Detener cualquier lector anterior
-      if (codeReaderInstance) {
-        try {
-          codeReaderInstance.reset();
-        } catch (e) {}
-      }
-
       const codeReader = new ZXing.BrowserMultiFormatReader();
-      codeReaderInstance = codeReader;
-
       codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
         if (result) {
           procesarQR(result.getText(), indice, punto, modal);
@@ -466,9 +402,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     } catch (e) {
       console.error('[QR] Error:', e);
-      alert('❌ Error de cámara');
-      scannerActivo = false;
-      if (modal && modal.parentNode) modal.remove();
+      const input = modal.querySelector('#qr-input');
+      input.focus();
+      input.placeholder = 'Error de cámara, ingresa manualmente';
     }
   }
 
@@ -479,6 +415,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.log('[QR] Punto:', punto.nombre);
       console.log('[QR] QR esperado:', punto.qrId);
 
+      // VALIDAR ESTRICTAMENTE que el código coincida con qrId del punto
       if (!punto.qrId) {
         console.error('[QR] El punto no tiene qrId configurado');
         alert('❌ Error: El punto no tiene QR configurado.');
@@ -486,30 +423,37 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
 
+      // Validación exacta del QR
       const esValido = codigoQR.trim() === punto.qrId.trim();
       
       if (!esValido) {
         console.error('[QR] RECHAZO - No coincide');
+        console.error('[QR] Esperado:', JSON.stringify(punto.qrId));
+        console.error('[QR] Escaneado:', JSON.stringify(codigoQR));
+        
         mostrarErrorQR(indice, punto, modal);
-        return;
+        scannerActivo = false;
+        return; // NO continúa - rechaza el QR
       }
 
       console.log('[QR] ✅ QR VÁLIDO para', punto.nombre);
 
+      // QR es válido, ahora procesar
       const puntoCompleto = rondaEnProgreso.puntosRonda[indice];
       const tienePreguntas = puntoCompleto && puntoCompleto.questions && puntoCompleto.questions.length > 0;
 
-      // Detener el scanner ANTES de procesar
-      detenerVideoQR(modal);
+      console.log('[QR] ¿Tiene preguntas?', tienePreguntas);
 
+      // Si el punto tiene preguntas, mostrar formulario
       if (tienePreguntas) {
+        detenerVideoQR(modal);
         if (modal) modal.remove();
         scannerActivo = false;
         mostrarFormularioPreguntas(codigoQR, indice, puntoCompleto);
       } else {
-        const overlay = mostrarOverlay('Guardando punto...');
-        await guardarPuntoEscaneado(codigoQR, indice, puntoCompleto);
-        ocultarOverlay();
+        // Sin preguntas, guardar directamente
+        guardarPuntoEscaneado(codigoQR, indice, puntoCompleto);
+        detenerVideoQR(modal);
         if (modal) modal.remove();
         scannerActivo = false;
         mostrarRondaEnProgreso();
@@ -571,11 +515,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const video = modal.querySelector('#scanner-video');
     if (video && video.srcObject) {
       video.srcObject.getTracks().forEach(track => track.stop());
-    }
-    if (codeReaderInstance) {
-      try {
-        codeReaderInstance.reset();
-      } catch (e) {}
     }
   }
 
@@ -746,17 +685,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 0.95em;
     `;
     btnGuardar.addEventListener('click', async () => {
-      const loadingOverlay = mostrarOverlay('Guardando punto...');
-      try {
-        const fotoBase64 = canvas.dataset.fotoBase64 || null;
-        await guardarPuntoConRespuestas(codigoQR, indice, punto, respuestasObj, fotoBase64);
-        ocultarOverlay();
-        overlay.remove();
-        mostrarRondaEnProgreso();
-      } catch (e) {
-        ocultarOverlay();
-        console.error('[Foto] Error:', e);
-      }
+      const fotoBase64 = canvas.dataset.fotoBase64 || null;
+      await guardarPuntoConRespuestas(codigoQR, indice, punto, respuestasObj, fotoBase64);
+      overlay.remove();
+      mostrarRondaEnProgreso();
     });
     buttonsDiv.appendChild(btnGuardar);
 
@@ -929,36 +861,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // ===================== CALCULAR HORARIO TÉRMINO =====================
-  function calcularHorarioTermino() {
-    const inicioMs = rondaEnProgreso.horarioInicio.toMillis ? 
-      rondaEnProgreso.horarioInicio.toMillis() : 
-      new Date(rondaEnProgreso.horarioInicio).getTime();
-    
-    const toleranciaMs = 
-      rondaEnProgreso.toleranciaTipo === 'horas'
-        ? rondaEnProgreso.tolerancia * 3600000
-        : rondaEnProgreso.tolerancia * 60000;
-
-    const terminoMs = inicioMs + toleranciaMs;
-    return new Date(terminoMs);
-  }
-
-  // ===================== DETERMINAR ESTADO DE LA RONDA =====================
-  function determinarEstadoRonda() {
-    const puntosRegistrados = Object.values(rondaEnProgreso.puntosRegistrados);
-    const escaneados = puntosRegistrados.filter(p => p.qrEscaneado).length;
-    const totales = puntosRegistrados.length;
-
-    if (escaneados === 0) {
-      return 'NO_REALIZADA';
-    } else if (escaneados < totales) {
-      return 'INCOMPLETA';
-    } else {
-      return 'TERMINADA';
-    }
-  }
-
   // ===================== TERMINAR RONDA AUTOMÁTICA =====================
   async function terminarRondaAuto() {
     if (!rondaEnProgreso) return;
@@ -966,15 +868,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       if (animFrameId) cancelAnimationFrame(animFrameId);
 
-      const estado = determinarEstadoRonda();
-      const horarioTermino = firebase.firestore.Timestamp.fromDate(calcularHorarioTermino());
-
       await db.collection('RONDAS_COMPLETADAS').doc(rondaEnProgreso.id).update({
-        estado: estado,
-        horarioTermino: horarioTermino
+        estado: 'TERMINADA',
+        horarioTermino: firebase.firestore.Timestamp.now()
       });
 
-      mostrarResumen(estado);
+      mostrarResumen();
       rondaEnProgreso = null;
 
       setTimeout(() => {
@@ -989,21 +888,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function terminarRonda() {
     if (!rondaEnProgreso) return;
 
-    const overlay = mostrarOverlay('Terminando ronda...');
-
     try {
       if (animFrameId) cancelAnimationFrame(animFrameId);
 
-      const estado = determinarEstadoRonda();
-      const horarioTermino = firebase.firestore.Timestamp.now();
-
       await db.collection('RONDAS_COMPLETADAS').doc(rondaEnProgreso.id).update({
-        estado: estado,
-        horarioTermino: horarioTermino
+        estado: 'TERMINADA',
+        horarioTermino: firebase.firestore.Timestamp.now()
       });
 
-      ocultarOverlay();
-      mostrarResumen(estado);
+      mostrarResumen();
       rondaEnProgreso = null;
 
       setTimeout(() => {
@@ -1011,13 +904,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       }, 5000);
     } catch (e) {
       console.error('[Ronda] Error terminando:', e);
-      ocultarOverlay();
       alert('Error: ' + e.message);
     }
   }
 
   // ===================== MOSTRAR RESUMEN =====================
-  function mostrarResumen(estado) {
+  // ===================== MOSTRAR RESUMEN =====================
+  function mostrarResumen() {
     const listDiv = document.getElementById('rondas-list');
     if (!listDiv || !rondaEnProgreso) return;
 
@@ -1026,34 +919,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const totales = puntosRegistrados.length;
     const noMarcados = puntosRegistrados.filter(p => !p.qrEscaneado);
 
-    let estadoTexto = '';
-    let estadoColor = '';
-    let estadoIcono = '';
-
-    if (estado === 'TERMINADA') {
-      estadoTexto = 'Ronda Completada';
-      estadoColor = '#10b981';
-      estadoIcono = '✅';
-    } else if (estado === 'INCOMPLETA') {
-      estadoTexto = 'Ronda Incompleta';
-      estadoColor = '#f97316';
-      estadoIcono = '⚠️';
-    } else if (estado === 'NO_REALIZADA') {
-      estadoTexto = 'Ronda No Realizada';
-      estadoColor = '#ef4444';
-      estadoIcono = '❌';
-    }
-
     let resumenHTML = `
       <div style="background: #1a1a1a; border: 1px solid #444; border-radius: 8px; padding: 30px; text-align: center;">
-        <h2 style="color: ${estadoColor}; margin: 0;">
-          ${estadoIcono} ${estadoTexto}
+        <h2 style="color: ${marcados === totales ? '#10b981' : '#f97316'}; margin: 0;">
+          ${marcados === totales ? '✅ Ronda Completada' : '⚠️ Ronda Incompleta'}
         </h2>
         <div style="font-size: 2em; color: #fff; margin: 20px 0; font-weight: bold;">
           ${marcados} / ${totales} Puntos Escaneados
-        </div>
-        <div style="background: #222; border-radius: 4px; padding: 12px; margin: 15px 0; color: #ccc; font-size: 0.9em;">
-          Estado: <strong style="color: ${estadoColor};">${estado}</strong>
         </div>
     `;
 
